@@ -1,0 +1,53 @@
+/*
+ * Copyright 2026 Netflix, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+package com.netflix.tools.jist;
+
+import module java.base;
+
+import javax.lang.model.element.Modifier;
+
+public enum Access {
+    PUBLIC,
+    PROTECTED,
+    PACKAGE,
+    PRIVATE;
+
+    boolean visible(AccessFlags flags) {
+        return switch (this) {
+            case PUBLIC -> flags.has(AccessFlag.PUBLIC);
+            case PROTECTED -> flags.has(AccessFlag.PUBLIC) || flags.has(AccessFlag.PROTECTED);
+            case PACKAGE -> !flags.has(AccessFlag.PRIVATE);
+            case PRIVATE -> true;
+        };
+    }
+
+    boolean visible(Set<AccessFlag> flags) {
+        return switch (this) {
+            case PUBLIC -> flags.contains(AccessFlag.PUBLIC);
+            case PROTECTED -> flags.contains(AccessFlag.PUBLIC) || flags.contains(AccessFlag.PROTECTED);
+            case PACKAGE -> !flags.contains(AccessFlag.PRIVATE);
+            case PRIVATE -> true;
+        };
+    }
+
+    boolean visibleModifiers(Set<Modifier> modifiers) {
+        return switch (this) {
+            case PUBLIC -> modifiers.contains(javax.lang.model.element.Modifier.PUBLIC);
+            case PROTECTED -> modifiers.contains(javax.lang.model.element.Modifier.PUBLIC) || modifiers.contains(javax.lang.model.element.Modifier.PROTECTED);
+            case PACKAGE -> !modifiers.contains(javax.lang.model.element.Modifier.PRIVATE);
+            case PRIVATE -> true;
+        };
+    }
+}

@@ -1,0 +1,218 @@
+/*
+ * Copyright 2026 Netflix, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+// Gradle init script that publishes source-set options for Jist.
+//
+// Usage:
+//   gradle --init-script /path/to/jist.init.gradle writeJavaToolOptions
+
+import org.gradle.api.attributes.Bundling
+import org.gradle.api.attributes.Category
+import org.gradle.api.attributes.DocsType
+import org.gradle.api.attributes.Usage
+import org.gradle.api.plugins.JavaPluginExtension
+
+def isModulePathEntry = { File entry ->
+    if (entry.isDirectory()) {
+        return new File(entry, 'module-info.class').isFile()
+    }
+    if (!entry.isFile() || !entry.name.endsWith('.jar')) return false
+    try (def jar = new java.util.jar.JarFile(entry)) {
+        if (jar.getJarEntry('module-info.class') != null) return true
+        if (jar.manifest?.mainAttributes?.getValue('Automatic-Module-Name')) return true
+        return jar.stream().anyMatch { jarEntry ->
+            jarEntry.name.startsWith('META-INF/versions/') &&
+                    jarEntry.name.endsWith('/module-info.class')
+        }
+    }
+}
+
+abstract class JistArgumentFileTask extends DefaultTask {
+
+    @Input
+    abstract ListProperty<String> getArguments()
+
+    @OutputFiles
+    abstract ConfigurableFileCollection getArgumentFiles()
+
+    @TaskAction
+    void writeArguments() {
+        getArgumentFiles().files.each { file ->
+            file.parentFile.mkdirs()
+            file.text = getArguments().get()
+                    .collect { JistArgumentFileTask.quote(it) }.join('\n') + '\n'
+            def ignoreFile = new File(file.parentFile, '.gitignore')
+            if (!ignoreFile.isFile()) ignoreFile.text = '*\n'
+        }
+    }
+
+    static String quote(String value) {
+        '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+    }
+}
+
+abstract class JavaOptionsRootTask extends DefaultTask {
+
+    @OutputFile
+    abstract RegularFileProperty getIgnoreFile()
+
+    @TaskAction
+    void writeIgnoreFile() {
+        def ignoreFile = getIgnoreFile().get().asFile
+        ignoreFile.parentFile.mkdirs()
+        ignoreFile.text = '*\n'
+    }
+}
+
+def optionsTask
+
+gradle.rootProject { root ->
+    optionsTask = root.tasks.register('writeJavaToolOptions', JavaOptionsRootTask) { task ->
+        task.group = 'jist'
+        task.description = 'Write path-scoped source-set options for Jist'
+        task.ignoreFile.set(root.layout.projectDirectory.file('.java-tool-options/.gitignore'))
+    }
+
+}
+
+allprojects { proj ->
+    proj.plugins.withId('java') {
+        def sourceSets = proj.extensions.getByType(JavaPluginExtension).sourceSets
+
+        sourceSets.configureEach { sourceSet ->
+            def compileTask = proj.tasks.named(sourceSet.compileJavaTaskName, JavaCompile)
+            def classesDirs = sourceSet.output.classesDirs
+            def compileClasspath = sourceSet.compileClasspath
+            def compileCpConfig = proj.configurations.getByName(
+                    sourceSet.compileClasspathConfigurationName)
+            def sourceJarFiles = compileCpConfig.incoming.artifactView { view ->
+                view.withVariantReselection()
+                view.lenient(true)
+                view.attributes { attrs ->
+                    attrs.attribute(Usage.USAGE_ATTRIBUTE,
+                            proj.objects.named(Usage, Usage.JAVA_RUNTIME))
+                    attrs.attribute(Category.CATEGORY_ATTRIBUTE,
+                            proj.objects.named(Category, Category.DOCUMENTATION))
+                    attrs.attribute(Bundling.BUNDLING_ATTRIBUTE,
+                            proj.objects.named(Bundling, Bundling.EXTERNAL))
+                    attrs.attribute(DocsType.DOCS_TYPE_ATTRIBUTE,
+                            proj.objects.named(DocsType, DocsType.SOURCES))
+                }
+            }.files
+
+            def contextArgs = proj.provider {
+                def compileClasspathFiles = compileClasspath.files
+                def args = []
+                def moduleInfo = sourceSet.java.srcDirs.collect {
+                    new File(it, 'module-info.java')
+                }.find { it.isFile() }
+                def modularSource = moduleInfo != null
+                def inferModulePath = compileTask.get().modularity.inferModulePath.getOrElse(false)
+                def modulePathFiles = new LinkedHashSet<File>()
+                if (modularSource) {
+                    modulePathFiles.addAll(classesDirs.files)
+                    if (inferModulePath) {
+                        modulePathFiles.addAll(compileClasspathFiles.findAll(isModulePathEntry))
+                    }
+                }
+                def classPathFiles = new LinkedHashSet<File>()
+                if (!modularSource) classPathFiles.addAll(classesDirs.files)
+                classPathFiles.addAll(compileClasspathFiles - modulePathFiles)
+                if (classPathFiles) {
+                    args.addAll(['--class-path', classPathFiles
+                            .collect { it.absolutePath }.join(File.pathSeparator)])
+                }
+                if (modulePathFiles) {
+                    args.addAll(['--module-path', modulePathFiles
+                            .collect { it.absolutePath }.join(File.pathSeparator)])
+                }
+                if (modularSource) {
+                    def declaration = moduleInfo.text =~
+                            /(?m)^\s*(?:open\s+)?module\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\{/
+                    if (!declaration.find()) {
+                        throw new GradleException("Cannot read module name from ${moduleInfo}")
+                    }
+                    args.addAll(['--module', declaration.group(1)])
+                }
+
+                def sourceDirs = new LinkedHashSet<File>(sourceSet.java.srcDirs)
+                proj.rootProject.allprojects.each { candidateProject ->
+                    if (!candidateProject.plugins.hasPlugin('java')) return
+                    def candidateSourceSets = candidateProject.extensions
+                            .getByType(JavaPluginExtension).sourceSets
+                    candidateSourceSets.each { candidate ->
+                        if (candidate == sourceSet) return
+                        def candidateOutputs = new LinkedHashSet<File>(
+                                candidate.output.classesDirs.files)
+                        def jarTask = candidateProject.tasks.findByName(candidate.jarTaskName)
+                        if (jarTask instanceof Jar) {
+                            candidateOutputs.add(jarTask.archiveFile.get().asFile)
+                        }
+                        if (candidateOutputs.any { compileClasspathFiles.contains(it) }) {
+                            sourceDirs.addAll(candidate.java.srcDirs)
+                        }
+                    }
+                }
+                def sourcePaths = sourceDirs.findAll { it.exists() }.collect { it.absolutePath } +
+                        sourceJarFiles.files.collect { it.absolutePath }
+                if (sourcePaths) {
+                    args.addAll(['--source-path', sourcePaths.join(File.pathSeparator)])
+                }
+
+                def forwardedFlags = ['--module-path', '-p', '--module-source-path',
+                                      '--add-modules', '--add-exports', '--add-reads',
+                                      '--limit-modules', '--system'] as Set
+                def compilerArgs = compileTask.get().options.allCompilerArgs
+                boolean hasExplicitSystem = false
+                for (int i = 0; i < compilerArgs.size(); i++) {
+                    if (forwardedFlags.contains(compilerArgs[i]) && i + 1 < compilerArgs.size()) {
+                        if (compilerArgs[i] == '--system') hasExplicitSystem = true
+                        args.addAll([compilerArgs[i], compilerArgs[++i]])
+                    }
+                }
+                if (!hasExplicitSystem) {
+                    args.addAll(['--system', compileTask.get().javaCompiler.get()
+                            .metadata.installationPath.asFile.absolutePath])
+                }
+                return args
+            }
+
+            def argumentTask = proj.tasks.register(
+                    sourceSet.getTaskName('writeJist', 'arguments'), JistArgumentFileTask) { task ->
+                task.group = 'jist'
+                task.description = "Write Jist options for ${sourceSet.name} source set"
+                task.arguments.set(contextArgs)
+                task.argumentFiles.from(proj.provider {
+                    sourceSet.java.srcDirs.collect { scope ->
+                        def rootPath = proj.rootProject.projectDir.toPath()
+                                .toAbsolutePath().normalize()
+                        def scopePath = scope.toPath().toAbsolutePath().normalize()
+                        if (scopePath.startsWith(rootPath)) {
+                            def relative = rootPath.relativize(scopePath).toString()
+                            return new File(proj.rootProject.projectDir,
+                                    '.java-tool-options/' + relative + '/jist.args')
+                        }
+                        return new File(scope, '.java-tool-options/jist.args')
+                    }
+                })
+            }
+
+            optionsTask.configure { task ->
+                task.dependsOn(argumentTask)
+            }
+
+            compileTask.configure { it.finalizedBy(optionsTask) }
+        }
+    }
+}

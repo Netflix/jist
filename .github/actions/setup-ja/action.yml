@@ -17,7 +17,7 @@ inputs:
   ja-version:
     description: ja version
     required: false
-    default: 0.17.1
+    default: 0.17.2
   jig-version:
     description: jig version
     required: false

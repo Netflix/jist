@@ -24,7 +24,7 @@ We can:
 We search exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. We do not perform completion, substring matching, ranking, typo correction, or implicit resolution of partially qualified names.
 
 > [!IMPORTANT]
-> This tool is currently in preview. Please report problems in the [`ja` issue tracker](https://github.com/Netflix/ja/issues) and share feedback, questions, and suggestions in [Discussions](https://github.com/Netflix/ja/discussions).
+> This tool is currently in preview. We are collecting all preview feedback in the [`ja` repository](https://github.com/Netflix/ja): use [Issues](https://github.com/Netflix/ja/issues) to report problems and [Discussions](https://github.com/Netflix/ja/discussions) for feedback, questions, and suggestions.
 
 ## Installation
 

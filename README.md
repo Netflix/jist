@@ -1,5 +1,8 @@
 # jist
 
+[![Maven Central](https://img.shields.io/maven-central/v/com.netflix/com.netflix.tools.jist)](https://central.sonatype.com/artifact/com.netflix/com.netflix.tools.jist)
+![JDK 25+](https://img.shields.io/badge/JDK-25%2B-blue)
+
 Java's standard tools can inspect a known class or render a known API, while text search can find matching words in available source. `jist` searches the Java symbols visible to a compilation instead. We find declarations and semantic usages across project source, compiled dependencies, application modules, and the JDK, then present them as readable Java source or declarations.
 
 Give us an exact simple name, a qualified namespace prefix, a source file, or a ClassFile:
@@ -21,7 +24,7 @@ We can:
 We search exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. We do not perform completion, substring matching, ranking, typo correction, or implicit resolution of partially qualified names.
 
 > [!IMPORTANT]
-> This project is currently in preview. We'd love to hear your feedback! Use Issues for bugs and Discussions for feedback and suggestions.
+> This tool is currently in preview. Please report problems in the [`ja` issue tracker](https://github.com/Netflix/ja/issues) and share feedback, questions, and suggestions in [Discussions](https://github.com/Netflix/ja/discussions).
 
 ## Installation
 

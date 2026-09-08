@@ -104,7 +104,7 @@ jist --module-path path/to/modules --add-modules ALL-MODULE-PATH com.example
 
 We evaluate visibility from the selected compilation modules and apply `--limit-modules`, `--add-reads`, and `--add-exports` to the resolved graph. A class-path entry is visible to a selected named module only when that module reads the unnamed module, for example through `--add-reads M=ALL-UNNAMED`.
 
-### Gradle projects
+### Interoperability
 
 The included Gradle init script can publish the options for each source set:
 
@@ -112,7 +112,7 @@ The included Gradle init script can publish the options for each source set:
 ./gradlew --init-script /path/to/jist/gradle/jist.init.gradle writeJavaToolOptions
 ```
 
-It writes a `jist.args` file beneath each mirrored source-set scope in the project's `.java-tool-options` directory. A launcher such as `ja` can then supply the applicable tool-specific arguments to `jist`. Project directories do not implicitly select a `main` source set.
+It writes a `jist.args` file beneath each mirrored source-set scope in a `.java-tool-options` directory. The native launchers can then supply the applicable tool-specific arguments to `jist`.
 
 ## Read source
 

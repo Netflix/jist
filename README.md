@@ -21,6 +21,8 @@ We can:
 - Find semantic usages of an exact type or member, including overriding methods
 - Produce terminal-friendly output or stable line-oriented output for other tools
 
+Searches use exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. We do not perform substring matching, ranking, typo correction, or implicit resolution of partially qualified names. Shell completion can enumerate visible symbols by simple or qualified prefix without changing these search semantics.
+
 > [!IMPORTANT]
 > This tool is currently in preview. We are collecting all preview feedback in the [`ja` repository](https://github.com/Netflix/ja): use [Issues](https://github.com/Netflix/ja/issues) to report problems and [Discussions](https://github.com/Netflix/ja/discussions) for feedback, questions, and suggestions.
 

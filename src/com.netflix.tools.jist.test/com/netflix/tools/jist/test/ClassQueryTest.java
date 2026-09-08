@@ -748,6 +748,33 @@ class ClassQueryTest {
     }
 
     @Test
+    void completionUsesTheSelectedCompilationContextAndCollapsesOverloads() {
+        var type = run(
+                "__complete",
+                "--system",
+                "none",
+                "--class-path",
+                ROOT.resolve("classes").toString(),
+                "--source",
+                "symbol",
+                "Exa");
+        var member = run("__complete", "--system", "none", "--class-path",
+                ROOT.resolve("classes").toString(), "com.example.Example.r");
+
+        assertEquals(0, type.exitCode(), type.error());
+        assertTrue(type.output().contains("com.example.Example\tJava class\n"),
+                type.output());
+        assertEquals(0, member.exitCode(), member.error());
+        assertEquals(
+                1,
+                member.output()
+                      .lines()
+                      .filter(line -> line.equals("com.example.Example.run\tJava method"))
+                      .count(),
+                member.output());
+    }
+
+    @Test
     void memberEnumerationWritesResultsBeforeScanningLaterClasses() throws IOException {
         var malformedJar = ROOT.resolve("malformed.jar");
         try (var jar = new JarOutputStream(Files.newOutputStream(malformedJar))) {

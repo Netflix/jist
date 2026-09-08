@@ -84,6 +84,22 @@ class HelpTest {
     }
 
     @Test
+    void completesSymbolOperandsSemantically() {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        int exitCode = new Jist().run(new PrintWriter(output, true), new PrintWriter(error, true), "__complete", "--source",
+                "symbol", "Str");
+
+        assertEquals(0, exitCode, error.toString());
+        assertTrue(output.toString()
+                         .lines()
+                         .anyMatch(line -> line.startsWith("java.lang.String\t")),
+                output.toString());
+        assertEquals("", error.toString());
+    }
+
+    @Test
     void conflictingOptionsRetainLastOptionWinsSemantics() throws Exception {
         var options = Options.parse(
                 new String[] {"-private", "-public", "--no-heading", "--heading", "--no-line-number", "--line-number",

@@ -17,8 +17,11 @@ package com.netflix.tools.jist;
 import module java.base;
 
 import com.netflix.tools.jist.CommandLine.Cardinality;
+import com.netflix.tools.jist.CommandLine.Completion;
+import com.netflix.tools.jist.CommandLine.CompletionRequest;
 import com.netflix.tools.jist.CommandLine.ConfigurationException;
 import com.netflix.tools.jist.CommandLine.ParsedArguments;
+import com.netflix.tools.jist.CommandLine.ToolInvocation;
 import com.netflix.tools.jist.CommandLine.ToolOption;
 
 final class JistCommandLine {
@@ -122,8 +125,25 @@ final class JistCommandLine {
         return commandLine.isSupportedOption(option);
     }
 
-    OptionalInt runCompletion(PrintWriter out, PrintWriter err, String... arguments) {
-        return commandLine.runCompletion(out, err, arguments);
+    OptionalInt runCompletion(PrintWriter out, PrintWriter err, Function<CompletionRequest, List<Completion>> completer,
+            String... arguments) {
+        return commandLine.runCompletion(out, err, completer, new ToolInvocation(List.of(arguments)));
+    }
+
+    List<Completion> complete(CompletionRequest request) {
+        return commandLine.complete(request);
+    }
+
+    boolean completesOptionValue(CompletionRequest request) {
+        var arguments = request.invocation().arguments();
+        if (arguments.isEmpty()) {
+            return false;
+        }
+        int optionsEnd = arguments.lastIndexOf("--");
+        if (optionsEnd >= 0) {
+            return false;
+        }
+        return commandLine.isSupportedOption(arguments.getLast()) > 0;
     }
 
     Options parse(String... arguments) throws ToolException {

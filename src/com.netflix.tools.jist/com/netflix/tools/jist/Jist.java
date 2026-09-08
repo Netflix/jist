@@ -19,6 +19,8 @@ import module java.base;
 import java.util.spi.ToolProvider;
 import javax.tools.OptionChecker;
 
+import com.netflix.tools.jist.CommandLine.Completion;
+import com.netflix.tools.jist.CommandLine.CompletionRequest;
 import com.netflix.tools.jist.Output.InteractivePrintWriter;
 import com.netflix.tools.jist.Output.SourceWarningPrintWriter;
 import com.netflix.tools.jist.Output.SourceWarnings;
@@ -49,7 +51,7 @@ public final class Jist implements ToolProvider, OptionChecker {
 
     @Override
     public int run(PrintWriter out, PrintWriter err, String... args) {
-        var completion = COMMAND_LINE.runCompletion(out, err, args);
+        var completion = COMMAND_LINE.runCompletion(out, err, this::complete, args);
         if (completion.isPresent()) {
             return completion.orElseThrow();
         }
@@ -141,6 +143,14 @@ public final class Jist implements ToolProvider, OptionChecker {
             e.printStackTrace(err);
             return 2;
         }
+    }
+
+    private List<Completion> complete(CompletionRequest request) {
+        var syntactic = COMMAND_LINE.complete(request);
+        if (!syntactic.isEmpty() || request.current().startsWith("-") || COMMAND_LINE.completesOptionValue(request)) {
+            return syntactic;
+        }
+        return SymbolCompletion.complete(request);
     }
 
     public static void main(String[] args) throws IOException {

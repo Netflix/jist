@@ -28,6 +28,9 @@ We search exact names rather than fuzzy matches. A simple name matches that comp
 
 ## Installation
 
+> [!NOTE]
+> Netflix engineers should use the internally bundled toolchain rather than installing this tool separately.
+
 Follow the `ja` [Installation Guide](https://github.com/Netflix/ja#installation) to install the bundled tools, including `jist`.
 
 For standalone use, `jar` and `jmod` artifacts are available on Maven Central. We require JDK 25 or later.

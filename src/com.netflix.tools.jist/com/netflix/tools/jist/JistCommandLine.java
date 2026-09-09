@@ -112,6 +112,7 @@ final class JistCommandLine {
                     help)
             .operand("SYMBOL|SOURCE-OR-CLASS-FILE", "Symbol prefix, source file, or class file", Cardinality.ZERO_OR_ONE)
             .argumentFiles()
+            .version(Jist.class.getModule())
             .completion()
             .build();
 
@@ -123,6 +124,10 @@ final class JistCommandLine {
 
     int isSupportedOption(String option) {
         return commandLine.isSupportedOption(option);
+    }
+
+    OptionalInt runVersion(PrintWriter out, String... arguments) {
+        return commandLine.runVersion("jist", out, arguments);
     }
 
     OptionalInt runCompletion(PrintWriter out, PrintWriter err, Function<CompletionRequest, List<Completion>> completer,

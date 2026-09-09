@@ -51,6 +51,10 @@ public final class Jist implements ToolProvider, OptionChecker {
 
     @Override
     public int run(PrintWriter out, PrintWriter err, String... args) {
+        var version = COMMAND_LINE.runVersion(out, args);
+        if (version.isPresent()) {
+            return version.orElseThrow();
+        }
         var completion = COMMAND_LINE.runCompletion(out, err, this::complete, args);
         if (completion.isPresent()) {
             return completion.orElseThrow();

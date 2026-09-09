@@ -196,6 +196,7 @@ public record Options(
                                                             none, body, signature (default), doc,
                                                             definition, symbol, type, or unit
                   -h, -?, --help                          Print this help message
+                  --version                               Print version information
                 """);
         out.flush();
     }

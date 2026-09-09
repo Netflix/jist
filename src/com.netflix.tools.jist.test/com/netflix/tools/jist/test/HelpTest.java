@@ -70,7 +70,7 @@ class HelpTest {
         assertEquals(1, checker.isSupportedOption("--source"));
         assertEquals(1, checker.isSupportedOption("-classpath"));
         assertEquals(0, checker.isSupportedOption("-public"));
-        assertEquals(-1, checker.isSupportedOption("--version"));
+        assertEquals(0, checker.isSupportedOption("--version"));
 
         int exitCode = jist.run(new PrintWriter(output, true), new PrintWriter(error, true), "__complete", "--source",
                 "si");
@@ -158,15 +158,19 @@ class HelpTest {
     }
 
     @Test
-    void versionIsNotAProviderOption() {
+    void printsVersion() {
         var output = new StringWriter();
         var error = new StringWriter();
+        String version = Jist.class.getModule()
+                .getDescriptor()
+                .rawVersion()
+                .orElse("dev");
 
         int exitCode = new Jist().run(new PrintWriter(output), new PrintWriter(error), "--version");
 
-        assertEquals(1, exitCode);
-        assertEquals("", output.toString());
-        assertEquals("Error: Unknown option: --version\n", error.toString());
+        assertEquals(0, exitCode);
+        assertEquals("jist " + version + "\n", output.toString());
+        assertEquals("", error.toString());
     }
 
     @Test
@@ -234,6 +238,7 @@ class HelpTest {
                                                             none, body, signature (default), doc,
                                                             definition, symbol, type, or unit
                   -h, -?, --help                          Print this help message
+                  --version                               Print version information
                 """,
                 output.toString());
         assertEquals("", error.toString());

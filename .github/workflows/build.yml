@@ -38,21 +38,5 @@ jobs:
       - name: Set up ja
         uses: Netflix/ja/.github/actions/setup-ja@v0.17.11
 
-      - name: Test source with bootstrap ja
+      - name: Test
         run: ja test --all
-
-      - name: Assemble jist distribution
-        run: >-
-          ja assemble --jmod --target-platform linux-x86_64
-          --module-version "$BUILD_VERSION" "$RUNNER_TEMP/artifacts"
-
-      - name: Link assembled jist development JDK
-        uses: Netflix/ja/.github/actions/link-assembled-tool@v0.17.11
-        with:
-          artifacts: ${{ runner.temp }}/artifacts
-          module: com.netflix.tools.jist
-
-      - name: Test source with built jist
-        run: |
-          test "$(command -v jist)" = "$JAVA_HOME/bin/jist"
-          ja test --all

@@ -291,7 +291,7 @@ class ModuleResolutionTest {
     private static Result run(String... args) {
         var output = new StringWriter();
         var error = new StringWriter();
-        int exitCode = new Jist().run(new PrintWriter(output), new PrintWriter(error), args);
+        int exitCode = new Jist().run(false, new PrintWriter(output), new PrintWriter(error), args);
         return new Result(exitCode, output.toString(), error.toString());
     }
 

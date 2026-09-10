@@ -72,8 +72,8 @@ class HelpTest {
         assertEquals(0, checker.isSupportedOption("-public"));
         assertEquals(0, checker.isSupportedOption("--version"));
 
-        int exitCode = jist.run(new PrintWriter(output, true), new PrintWriter(error, true), "__complete", "--source",
-                "si");
+        int exitCode = jist.run(false, new PrintWriter(output, true), new PrintWriter(error, true), "__complete",
+                "--source", "si");
 
         assertEquals(0, exitCode, error.toString());
         assertEquals(List.of("signature\tRead source at the selected scope", ":0"),
@@ -88,8 +88,8 @@ class HelpTest {
         var output = new StringWriter();
         var error = new StringWriter();
 
-        int exitCode = new Jist().run(new PrintWriter(output, true), new PrintWriter(error, true), "__complete", "--source",
-                "symbol", "Str");
+        int exitCode = new Jist().run(false, new PrintWriter(output, true), new PrintWriter(error, true), "__complete",
+                "--source", "symbol", "Str");
 
         assertEquals(0, exitCode, error.toString());
         assertTrue(output.toString()
@@ -117,7 +117,7 @@ class HelpTest {
         var output = new StringWriter();
         var error = new StringWriter();
 
-        int exitCode = new Jist().run(new PrintWriter(output), new PrintWriter(error), "--aot-warmup");
+        int exitCode = new Jist().run(false, new PrintWriter(output), new PrintWriter(error), "--aot-warmup");
 
         assertEquals(0, exitCode, error.toString());
         assertEquals("", output.toString());
@@ -149,7 +149,7 @@ class HelpTest {
             var output = new StringWriter();
             var error = new StringWriter();
 
-            int exitCode = new Jist().run(new PrintWriter(output), new PrintWriter(error), option);
+            int exitCode = new Jist().run(false, new PrintWriter(output), new PrintWriter(error), option);
 
             assertEquals(1, exitCode, option);
             assertEquals("", output.toString(), option);
@@ -166,7 +166,7 @@ class HelpTest {
                 .rawVersion()
                 .orElse("dev");
 
-        int exitCode = new Jist().run(new PrintWriter(output), new PrintWriter(error), "--version");
+        int exitCode = new Jist().run(false, new PrintWriter(output), new PrintWriter(error), "--version");
 
         assertEquals(0, exitCode);
         assertEquals("jist " + version + "\n", output.toString());
@@ -178,7 +178,7 @@ class HelpTest {
         var output = new StringWriter();
         var error = new StringWriter();
 
-        int exitCode = new Jist().run(new PrintWriter(output), new PrintWriter(error), "--help");
+        int exitCode = new Jist().run(false, new PrintWriter(output), new PrintWriter(error), "--help");
 
         assertEquals(0, exitCode);
         assertEquals(

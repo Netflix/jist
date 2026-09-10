@@ -271,6 +271,16 @@ class SourceQueryTest {
     }
 
     @Test
+    void terminalStatusControlsDefaultFormatting() {
+        var result = run(true, "--source", "signature", SOURCE + ".run");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals(
+                "\033[32m9\033[0m\033[36m:\033[0m" + "    public int run(int amount) {\n",
+                result.output());
+    }
+
+    @Test
     void qualifiedPathExpandsInteractiveSourceHeadings() {
         var result = run("--heading", "--color", "never", "--qualified-path", "--source", "signature",
                 SOURCE + ".run");
@@ -408,7 +418,14 @@ class SourceQueryTest {
     private static Result run(String... args) {
         var output = new StringWriter();
         var error = new StringWriter();
-        int exitCode = new Jist().run(new PrintWriter(output), new PrintWriter(error), args);
+        int exitCode = new Jist().run(false, new PrintWriter(output), new PrintWriter(error), args);
+        return new Result(exitCode, output.toString(), error.toString());
+    }
+
+    private static Result run(boolean terminal, String... args) {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        int exitCode = new Jist().run(terminal, new PrintWriter(output), new PrintWriter(error), args);
         return new Result(exitCode, output.toString(), error.toString());
     }
 

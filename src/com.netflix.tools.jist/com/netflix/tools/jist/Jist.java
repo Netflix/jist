@@ -51,6 +51,10 @@ public final class Jist implements ToolProvider, OptionChecker {
 
     @Override
     public int run(PrintWriter out, PrintWriter err, String... args) {
+        return run(false, out, err, args);
+    }
+
+    public int run(boolean terminal, PrintWriter out, PrintWriter err, String... args) {
         var version = COMMAND_LINE.runVersion(out, args);
         if (version.isPresent()) {
             return version.orElseThrow();
@@ -74,7 +78,7 @@ public final class Jist implements ToolProvider, OptionChecker {
                                 ? null
                                 : opts.source() != null ? opts.source() : SourceScope.SIGNATURE);
             }
-            out = formattedOutput(opts, out, err);
+            out = formattedOutput(opts, out, err, terminal);
             var environment = new SearchEnvironment(opts);
             var declarations = new DeclarationSearch(environment);
             if (opts.target() != null) {
@@ -159,12 +163,12 @@ public final class Jist implements ToolProvider, OptionChecker {
 
     public static void main(String[] args) throws IOException {
         var jist = new Jist();
-        int exitCode = jist.run(new PrintWriter(System.out, true), new PrintWriter(System.err, true), args);
+        int exitCode = jist.run(System.console() != null, new PrintWriter(System.out, true),
+                new PrintWriter(System.err, true), args);
         System.exit(exitCode);
     }
 
-    private static PrintWriter formattedOutput(Options opts, PrintWriter out, PrintWriter err) {
-        var terminal = System.console() != null;
+    private static PrintWriter formattedOutput(Options opts, PrintWriter out, PrintWriter err, boolean terminal) {
         var compactFile = compactSourceFileOutput(opts);
         var heading = !compactFile
                 && (opts.listOnly()

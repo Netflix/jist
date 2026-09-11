@@ -55,11 +55,16 @@ public final class Jist implements ToolProvider, OptionChecker {
     }
 
     public int run(boolean terminal, PrintWriter out, PrintWriter err, String... args) {
+        return run(terminal, out, err, Path.of(""), args);
+    }
+
+    public int run(boolean terminal, PrintWriter out, PrintWriter err, Path workingDirectory,
+            String... args) {
         var version = COMMAND_LINE.runVersion(out, args);
         if (version.isPresent()) {
             return version.orElseThrow();
         }
-        var completion = COMMAND_LINE.runCompletion(out, err, this::complete, args);
+        var completion = COMMAND_LINE.runCompletion(out, err, this::complete, workingDirectory, args);
         if (completion.isPresent()) {
             return completion.orElseThrow();
         }
@@ -67,7 +72,7 @@ public final class Jist implements ToolProvider, OptionChecker {
             return warmup(err);
         }
         try {
-            var opts = Options.parse(args);
+            var opts = COMMAND_LINE.parse(workingDirectory, err, args);
             if (opts.help()) {
                 Options.printUsage(out);
                 return 0;

@@ -114,7 +114,7 @@ The included Gradle init script can publish the options for each source set:
 ./gradlew --init-script /path/to/jist/gradle/jist.init.gradle writeJavaToolOptions
 ```
 
-It writes a `jist.args` file beneath each mirrored source-set scope in a `.java-tool-options` directory. The native launchers can then supply the applicable tool-specific arguments to `jist`.
+It writes a `jist.args` file beneath each mirrored source-set scope in a `.java-tool-options` directory. Command-line preparation activates the applicable arguments based on the invocation directory.
 
 ## Read source
 

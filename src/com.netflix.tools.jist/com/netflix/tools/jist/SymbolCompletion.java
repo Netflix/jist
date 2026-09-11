@@ -67,7 +67,7 @@ final class SymbolCompletion {
         public void symbol(SymbolKind kind, String name, String location) {
             String value = withoutParameters(name);
             if (value.startsWith(current) || terminalName(value).startsWith(current)) {
-                completions.putIfAbsent(value, new Completion(value, "Java " + kind.optionName()));
+                completions.putIfAbsent(value, new Completion(value, kind.optionName()));
             }
         }
 

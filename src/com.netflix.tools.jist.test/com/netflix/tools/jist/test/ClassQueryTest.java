@@ -762,14 +762,14 @@ class ClassQueryTest {
                 ROOT.resolve("classes").toString(), "com.example.Example.r");
 
         assertEquals(0, type.exitCode(), type.error());
-        assertTrue(type.output().contains("com.example.Example\tJava class\n"),
+        assertTrue(type.output().contains("com.example.Example\tclass\n"),
                 type.output());
         assertEquals(0, member.exitCode(), member.error());
         assertEquals(
                 1,
                 member.output()
                       .lines()
-                      .filter(line -> line.equals("com.example.Example.run\tJava method"))
+                      .filter(line -> line.equals("com.example.Example.run\tmethod"))
                       .count(),
                 member.output());
     }

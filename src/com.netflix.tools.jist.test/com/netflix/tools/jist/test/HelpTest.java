@@ -16,6 +16,8 @@ package com.netflix.tools.jist.test;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
@@ -25,6 +27,7 @@ import com.netflix.tools.jist.Access;
 import com.netflix.tools.jist.Jist;
 import com.netflix.tools.jist.Options;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -122,6 +125,57 @@ class HelpTest {
         assertEquals(0, exitCode, error.toString());
         assertEquals("", output.toString());
         assertEquals("", error.toString());
+    }
+
+    @Test
+    void activatesProjectOptionsFromTheInvocationDirectory(@TempDir Path directory) throws Exception {
+        Path options = Files.createDirectories(directory.resolve(".java-tool-options"));
+        Files.writeString(options.resolve("jist.args"), "--help\n");
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        int exitCode = new Jist().run(false, new PrintWriter(output), new PrintWriter(error), directory);
+
+        assertEquals(0, exitCode, error.toString());
+        assertTrue(output.toString().startsWith("Usage: jist "), output.toString());
+        assertEquals("jist: picked up options from .java-tool-options/jist.args\n", error.toString());
+    }
+
+    @Test
+    void activatesProjectOptionsForCompletion(@TempDir Path directory) throws Exception {
+        Path options = Files.createDirectories(directory.resolve(".java-tool-options"));
+        Files.writeString(options.resolve("jist.args"), "--source\n");
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        int exitCode = new Jist().run(false, new PrintWriter(output), new PrintWriter(error), directory,
+                "__complete", "");
+
+        assertEquals(0, exitCode, error.toString());
+        assertTrue(output.toString().contains("none\tRead source at the selected scope\n"), output.toString());
+        assertEquals("jist: picked up options from .java-tool-options/jist.args\n", error.toString());
+    }
+
+    @Test
+    void ambiguousProjectOptionsSuggestChangingDirectory(@TempDir Path directory) throws Exception {
+        Path options = Files.createDirectories(directory.resolve(".java-tool-options"));
+        Files.createDirectories(directory.resolve("app/src/main"));
+        Files.createDirectories(directory.resolve("app/src/test"));
+        Files.createDirectories(options.resolve("app/src/main"));
+        Files.createDirectories(options.resolve("app/src/test"));
+        Files.writeString(options.resolve("app/src/main/jist.args"), "main\n");
+        Files.writeString(options.resolve("app/src/test/jist.args"), "test\n");
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        int exitCode = new Jist().run(false, new PrintWriter(output), new PrintWriter(error), directory);
+
+        assertEquals(1, exitCode, error.toString());
+        assertEquals("", output.toString());
+        assertTrue(error.toString().contains("run from within one of:"), error.toString());
+        assertTrue(error.toString().contains("  app/src/main"), error.toString());
+        assertTrue(error.toString().contains("  app/src/test"), error.toString());
+        assertFalse(error.toString().contains("-C"), error.toString());
     }
 
     @Test

@@ -112,6 +112,7 @@ final class JistCommandLine {
                     help)
             .operand("SYMBOL|SOURCE-OR-CLASS-FILE", "Symbol prefix, source file, or class file", Cardinality.ZERO_OR_ONE)
             .argumentFiles()
+            .javaToolOptions()
             .version(Jist.class.getModule())
             .completion()
             .build();
@@ -130,9 +131,18 @@ final class JistCommandLine {
         return commandLine.runVersion("jist", out, arguments);
     }
 
-    OptionalInt runCompletion(PrintWriter out, PrintWriter err, Function<CompletionRequest, List<Completion>> completer,
+    OptionalInt runCompletion(PrintWriter out, PrintWriter err,
+            Function<CompletionRequest, List<Completion>> completer, Path workingDirectory,
             String... arguments) {
-        return commandLine.runCompletion(out, err, completer, new ToolInvocation(List.of(arguments)));
+        try {
+            return commandLine.runCompletion(out, err, request -> {
+                var prepared = commandLine.prepare("jist", request.invocation(), err);
+                return completer.apply(new CompletionRequest(prepared, request.current()));
+            }, new ToolInvocation(workingDirectory, List.of(arguments)));
+        } catch (ConfigurationException e) {
+            err.println("Error: " + parseMessage(e.getMessage()));
+            return OptionalInt.of(1);
+        }
     }
 
     List<Completion> complete(CompletionRequest request) {
@@ -152,15 +162,27 @@ final class JistCommandLine {
     }
 
     Options parse(String... arguments) throws ToolException {
-        ParsedArguments parsed;
         try {
-            parsed = commandLine.parse(arguments);
+            return parse(commandLine.parse(arguments));
         } catch (ConfigurationException e) {
             throw new ToolException(1, parseMessage(e.getMessage()));
         } catch (IllegalArgumentException e) {
             throw new ToolException(1, parseMessage(e.getMessage()));
         }
+    }
 
+    Options parse(Path workingDirectory, PrintWriter diagnostics, String... arguments) throws ToolException {
+        try {
+            return parse(commandLine.parse("jist", new ToolInvocation(workingDirectory, List.of(arguments)),
+                    diagnostics));
+        } catch (ConfigurationException e) {
+            throw new ToolException(1, parseMessage(e.getMessage()));
+        } catch (IllegalArgumentException e) {
+            throw new ToolException(1, parseMessage(e.getMessage()));
+        }
+    }
+
+    private Options parse(ParsedArguments parsed) throws ToolException {
         String target = parsed.operands().isEmpty() ? null : parsed.operands().getFirst();
         if (target != null && target.contains("::")) {
             throw new ToolException(1, "Invalid symbol target '" + target + "'; use '.' between a type and member");

@@ -23,7 +23,8 @@ We can:
 
 Searches use exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. We do not perform substring matching, ranking, typo correction, or implicit resolution of partially qualified names. Shell completion can enumerate visible symbols by simple or qualified prefix without changing these search semantics.
 
-This tool is currently in preview. We are collecting feedback for all of the tools together in [Discussions](https://github.com/Netflix/ja/discussions).
+> [!IMPORTANT]
+> This tool is currently in preview. We are collecting feedback for all of the tools together in [Discussions](https://github.com/Netflix/ja/discussions).
 
 ## Installation
 

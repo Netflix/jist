@@ -108,13 +108,72 @@ We evaluate visibility from the selected compilation modules and apply `--limit-
 
 ### Interoperability
 
-The included Gradle init script can publish the options for each source set:
+Interoperability with other tools is via argument files in a `.java-tool-options` directory. The `.java-tool-options` directory mirrors the directory tree beside it. A file named `jist.args` contains arguments for `jist`. For example:
+
+```text
+project/
+  .java-tool-options/
+    src/main/java/jist.args
+    src/test/java/jist.args
+  src/
+    main/java/
+    test/java/
+```
+
+Here, `src/main/java/jist.args` applies when `jist` runs from `project/src/main/java` or any directory beneath it. We search upward from its invocation directory for the nearest `.java-tool-options` directory and chooses the most specific applicable `jist.args` file. A `jist.args` directly beneath `.java-tool-options` applies at the directory containing `.java-tool-options` and acts as an unscoped fallback.
+
+Change your working directory or use `-C` to tell `jist` the context you want to search:
+
+```sh
+cd project/src/main/java
+jist com.example
+
+cd ../../test/java
+jist --usages com.example.Application.start
+```
+
+If multiple scopes are contained in the current directory, we reports them and asks you to run from within one. When an argument file is activated, Jist reports it on standard error:
+
+```text
+jist: picked up options from .java-tool-options/src/main/java/jist.args
+```
+
+`jist.args` uses Java argument-file quoting and may contain the same options accepted on the command line. Project arguments are read before explicitly supplied arguments, so command-line options can refine the configured context.
+
+#### Gradle
+
+The included Gradle init script publishes `.java-tool-options` configuration without requiring a project plugin:
 
 ```sh
 ./gradlew --init-script /path/to/jist/gradle/jist.init.gradle writeJavaToolOptions
 ```
 
-It writes a `jist.args` file beneath each mirrored source-set scope in a `.java-tool-options` directory. Command-line preparation activates the applicable arguments based on the invocation directory.
+`writeJavaToolOptions` is an aggregate task on the root project. For each source directory in each Java source set, including source sets in subprojects, it writes:
+
+```text
+<root>/.java-tool-options/<project-relative-source-directory>/jist.args
+```
+
+A conventional multi-project build might therefore produce:
+
+```text
+.java-tool-options/
+  app/src/main/java/jist.args
+  app/src/test/java/jist.args
+  library/src/main/java/jist.args
+```
+
+A source directory outside the root project receives its own adjacent `.java-tool-options/jist.args`. The init script adds `.gitignore` files to the generated directories, which are intended to remain local build state.
+
+Each generated argument file describes the corresponding Gradle source set's compilation context:
+
+- `--class-path` contains the source-set output and compile class path that belong to the unnamed module.
+- `--source-path` contains existing Java source directories, source directories of project dependencies on the compile class path, and dependency source archives that Gradle can resolve. Missing source variants are tolerated.
+- A source set with `module-info.java` receives `--module` with its declared module name and its compiled output on `--module-path`. When Gradle's module-path inference is enabled, modular JARs and directories, including automatic modules, are separated from the ordinary class path.
+- `--module-path`, `--module-source-path`, `--add-modules`, `--add-exports`, `--add-reads`, `--limit-modules`, and `--system` values explicitly supplied to the `JavaCompile` task are forwarded.
+- If the compile task does not specify `--system`, the file points `--system` at the JDK selected by that task's Java toolchain.
+
+Paths are absolute and each value is quoted using Java argument-file syntax. The init script also arranges for Java compile tasks to finalize `writeJavaToolOptions`, so ordinary Gradle compilation refreshes the files. Running `writeJavaToolOptions` directly only writes the Jist configuration; it does not compile the source sets. The integration does not generate stubs, build a symbol index, extract source archives, or cache search results.
 
 ## Read source
 

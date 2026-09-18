@@ -3,16 +3,16 @@
 [![Maven Central](https://img.shields.io/maven-central/v/com.netflix/com.netflix.tools.jist)](https://central.sonatype.com/artifact/com.netflix/com.netflix.tools.jist)
 ![JDK 25+](https://img.shields.io/badge/JDK-25%2B-blue)
 
-`jist` provides high performance, source aware search of Java class symbols for a given class or module path.
+`jist` provides high-performance, source-aware search of Java class symbols for a given class or module path.
 
-The tool accepts exact simple name, a qualified namespace prefix, a source file, or a ClassFile:
+Search targets can be an exact simple name, a qualified namespace prefix, a source file, or a ClassFile:
 
 ```console
 $ jist java.lang.String.intern
 java.lang.String(String.java:4711):     public native String intern();
 ```
 
-We can:
+Capabilities include:
 
 - Find modules, packages, types, methods, constructors, and fields
 - Search the JDK without additional configuration
@@ -21,10 +21,10 @@ We can:
 - Find semantic usages of an exact type or member, including overriding methods
 - Produce terminal-friendly output or stable line-oriented output for other tools
 
-Searches use exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. We do not perform substring matching, ranking, typo correction, or implicit resolution of partially qualified names. Shell completion can enumerate visible symbols by simple or qualified prefix without changing these search semantics.
+Searches use exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. There is no substring matching, ranking, typo correction, or implicit resolution of partially qualified names.
 
 > [!IMPORTANT]
-> This tool is currently in preview. We are collecting feedback for all of the tools together in [Discussions](https://github.com/Netflix/ja/discussions).
+> This tool is currently in preview. Please share feedback for any of the tools in [Discussions](https://github.com/Netflix/ja/discussions).
 
 ## Installation
 
@@ -33,293 +33,39 @@ Searches use exact names rather than fuzzy matches. A simple name matches that c
 
 Follow the `ja` [Installation Guide](https://github.com/Netflix/ja#installation) to install the bundled tools, including `jist`.
 
-For standalone use, `jar` and `jmod` artifacts are available on Maven Central. We require JDK 25 or later.
+For standalone use, `jar` and `jmod` artifacts are available on Maven Central. JDK 25 or later is required.
 
-## Find declarations
+## Quick start
 
-A simple name finds every visible symbol whose complete simple name matches:
+Find every visible symbol with a complete simple name:
 
 ```sh
 jist HttpClient
-jist isEmpty
-jist MAX_VALUE
 ```
 
-A qualified name selects an exact package, type, or member prefix:
+Select an exact package, type, or member prefix with a qualified name:
 
 ```sh
-jist java.net.http
-jist java.lang.String
 jist java.lang.String.valueOf
-jist java.lang.Integer.MAX_VALUE
 ```
 
-A package name includes the packages and symbols beneath it. A type name includes the type and its members. A method name includes all overloads. Use `new` for constructors:
+Find semantic references to an exact type or member:
 
 ```sh
-jist java.lang.String.new
-```
-
-Run without a target to enumerate every visible symbol:
-
-```sh
-jist
-```
-
-You can also inspect one source file or ClassFile directly:
-
-```sh
-jist path/to/Example.java
-jist path/to/Example.class
-```
-
-We show literal source signatures when source is available and fall back to a declaration reconstructed from the ClassFile:
-
-```console
-$ jist java.lang.String.isEmpty
-java.lang.String(String.java:1600):     public boolean isEmpty() {
-```
-
-The name before the colon is the compilation unit that owns the declaration. Source output adds its filename and line number in parentheses. Nested types and their members remain anchored by their top-level compilation unit:
-
-```text
-java.util.Map: public abstract interface Entry<K, V> {
-```
-
-## Search a project
-
-We search the running JDK without setup. To search a project, provide the same classes, modules, and sources used to compile it. We accept the corresponding standard Java options:
-
-```sh
-jist --class-path build/classes:libs/example.jar com.example
-jist --source-path src/main/java com.example
-jist --module-path build/modules:libs/example.jar --module com.example.app com.example
-jist --module-source-path src --module com.example.app com.example
-jist --system /path/to/jdk java.lang
-```
-
-Class-path entries belong to the unnamed module. `--module` selects one or more comma-separated compilation modules. `--module-path` makes application modules observable, but does not make every module a root. `--add-modules` adds roots, and we follow their resolved `requires` edges:
-
-```sh
-jist --module-path path/to/modules --add-modules ALL-MODULE-PATH com.example
-```
-
-We evaluate visibility from the selected compilation modules and apply `--limit-modules`, `--add-reads`, and `--add-exports` to the resolved graph. A class-path entry is visible to a selected named module only when that module reads the unnamed module, for example through `--add-reads M=ALL-UNNAMED`.
-
-### Interoperability
-
-Interoperability with other tools is via argument files in a `.java-tool-options` directory. The `.java-tool-options` directory mirrors the directory tree beside it. A file named `jist.args` contains arguments for `jist`. For example:
-
-```text
-project/
-  .java-tool-options/
-    src/main/java/jist.args
-    src/test/java/jist.args
-  src/
-    main/java/
-    test/java/
-```
-
-Here, `src/main/java/jist.args` applies when `jist` runs from `project/src/main/java` or any directory beneath it. We search upward from its invocation directory for the nearest `.java-tool-options` directory and chooses the most specific applicable `jist.args` file. A `jist.args` directly beneath `.java-tool-options` applies at the directory containing `.java-tool-options` and acts as an unscoped fallback.
-
-Change your working directory or use `-C` to tell `jist` the context you want to search:
-
-```sh
-cd project/src/main/java
-jist com.example
-
-cd ../../test/java
-jist --usages com.example.Application.start
-```
-
-If multiple scopes are contained in the current directory, we reports them and asks you to run from within one. When an argument file is activated, Jist reports it on standard error:
-
-```text
-jist: picked up options from .java-tool-options/src/main/java/jist.args
-```
-
-`jist.args` uses Java argument-file quoting and may contain the same options accepted on the command line. Project arguments are read before explicitly supplied arguments, so command-line options can refine the configured context.
-
-#### Gradle
-
-The included Gradle init script publishes `.java-tool-options` configuration without requiring a project plugin:
-
-```sh
-./gradlew --init-script /path/to/jist/gradle/jist.init.gradle writeJavaToolOptions
-```
-
-`writeJavaToolOptions` is an aggregate task on the root project. For each source directory in each Java source set, including source sets in subprojects, it writes:
-
-```text
-<root>/.java-tool-options/<project-relative-source-directory>/jist.args
-```
-
-A conventional multi-project build might therefore produce:
-
-```text
-.java-tool-options/
-  app/src/main/java/jist.args
-  app/src/test/java/jist.args
-  library/src/main/java/jist.args
-```
-
-A source directory outside the root project receives its own adjacent `.java-tool-options/jist.args`. The init script adds `.gitignore` files to the generated directories, which are intended to remain local build state.
-
-Each generated argument file describes the corresponding Gradle source set's compilation context:
-
-- `--class-path` contains the source-set output and compile class path that belong to the unnamed module.
-- `--source-path` contains existing Java source directories, source directories of project dependencies on the compile class path, and dependency source archives that Gradle can resolve. Missing source variants are tolerated.
-- A source set with `module-info.java` receives `--module` with its declared module name and its compiled output on `--module-path`. When Gradle's module-path inference is enabled, modular JARs and directories, including automatic modules, are separated from the ordinary class path.
-- `--module-path`, `--module-source-path`, `--add-modules`, `--add-exports`, `--add-reads`, `--limit-modules`, and `--system` values explicitly supplied to the `JavaCompile` task are forwarded.
-- If the compile task does not specify `--system`, the file points `--system` at the JDK selected by that task's Java toolchain.
-
-Paths are absolute and each value is quoted using Java argument-file syntax. The init script also arranges for Java compile tasks to finalize `writeJavaToolOptions`, so ordinary Gradle compilation refreshes the files. Running `writeJavaToolOptions` directly only writes the Jist configuration; it does not compile the source sets. The integration does not generate stubs, build a symbol index, extract source archives, or cache search results.
-
-## Read source
-
-Use `-s` or `--source` to choose how much source to show:
-
-| Scope | Output |
-|---|---|
-| `none` | Compiled declaration without reading source |
-| `body` | Attached-source lines named by a compiled method's line-number table |
-| `signature` | Literal source declaration header (default) |
-| `doc` | Associated Javadoc through the end of the declaration header |
-| `definition` | Associated Javadoc and the complete declaration |
-| `symbol` | Source appropriate to the selected symbol |
-| `type` | Complete outermost top-level type and its Javadoc |
-| `unit` | Complete attached source file |
-
-For example, show the Javadoc and implementation of `String.length()`:
-
-```console
-$ jist --source definition java.lang.String.length
-java.lang.String(String.java:1574):     /**
-java.lang.String(String.java:1575):      * Returns the length of this string.
-java.lang.String(String.java:1576):      *
-java.lang.String(String.java:1581):      */
-java.lang.String(String.java:1582):     public int length() {
-java.lang.String(String.java:1583):         return value.length >> coder();
-java.lang.String(String.java:1584):     }
-```
-
-`symbol` emits the complete compilation unit for a top-level type, the complete declaration for a nested type or executable, and the signature for other symbols.
-
-`body` uses the selected methods' ClassFile line-number tables. It can therefore show attached non-Java source, such as Kotlin, without trying to infer language-specific declaration boundaries. Abstract or native methods and ClassFiles without line-number tables fall back to compiled declarations. `unit` also supports complete attached non-Java source files.
-
-When requested source is unavailable, we warn once per compilation unit on standard error and print deterministic ClassFile output instead. Use `--source none` when compiled declarations are intended. We omit compiler-generated Kotlin metadata annotations from Java-shaped declarations and retain ordinary declaration annotations and values.
-
-## Find usages
-
-Pass one exact type or member to `--usages`:
-
-```sh
-jist --usages com.example.SessionManager.create
 jist --usages java.lang.Integer.MAX_VALUE
-jist --usages java.lang.String.new
 ```
 
-A method name includes all overloads. Method usages include overriding declarations and references resolved to overrides. Each result shows the source line containing the reference:
-
-```text
-com.example.LoginService(LoginService.java:74):         return sessionManager.create(userId);
-```
-
-Widen each match to its containing declaration, top-level type, or source file when more context is useful:
+Show source documentation and the complete declaration:
 
 ```sh
-jist --usages com.example.SessionManager.create --source definition
-jist --usages com.example.SessionManager.create --source type
-jist --usages com.example.SessionManager.create --source unit
+jist --source definition java.lang.String.length
 ```
 
-Zero usages is a successful empty result. When source text is unavailable, we print the enclosing symbol and any debug coordinates available from the ClassFile.
+## Documentation
 
-## Filter symbols
+The [wiki](https://github.com/Netflix/jist/wiki) covers:
 
-Use `-k` or `--kind` to include only particular declaration kinds:
-
-```sh
-jist -k module java.base
-jist -k package java.lang
-jist -k type java.lang
-jist -k class com.example
-jist -k interface java.util
-jist -k enum java.time
-jist -k record com.example
-jist -k annotation java.lang
-jist -k method java.lang.String
-jist -k field java.lang.Integer
-```
-
-`type` is the union of classes, interfaces, enums, records, and annotations. Repeat `--kind` to include more than one kind.
-
-Module declarations come from resolved module descriptors. Packages use `package-info.java` documentation and annotations when available, and otherwise appear as synthesized `package NAME;` declarations. We do not synthesize unobservable parent packages.
-
-We show public and protected library declarations by default. Choose another visibility level when needed:
-
-```text
--public       Public declarations
--protected    Public and protected declarations
--package      Public, protected, and package declarations
--private      All declarations
-```
-
-## Control output
-
-On a terminal, we group consecutive results beneath compilation-unit headings and color symbol kinds, names, and line numbers:
-
-```text
-class java.lang.String(String.java)
-1600:    public boolean isEmpty() {
-1601:        return value.length == 0;
-1602:    }
-```
-
-Redirected output keeps one complete result on each line so it composes with shell tools:
-
-```sh
-jist -k method java.lang.String | grep valueOf
-jist -k type java.net | sort -u | fzf
-```
-
-Use `--pretty` to force terminal presentation. `--heading`, `--no-heading`, and `--color auto|always|never` control grouping and color independently.
-
-An explicit source-file target omits its redundant unit and filename by default:
-
-```text
-12:    public void run() {
-```
-
-Use `--heading`, `--no-heading`, or `--qualified-path` to retain file context. `--qualified-path` shows a project path or archive URI for source output and the ClassFile origin for compiled output.
-
-Additional output controls include:
-
-- `-l` prints one kind and qualified name for each matching symbol
-- `-N` or `--no-line-number` removes source line numbers
-- `--break` inserts a blank line between non-consecutive source matches
-- `--source doc -N --break` produces compact API documentation
-
-Usage searches highlight only source token ranges attributed by javac to the requested symbol. Declarations and ClassFile-only usages are not highlighted.
-
-## Help
-
-```sh
-jist --help
-jist --version
-```
-
-## Build and test
-
-Build and test `jist` with JDK 25 or later:
-
-```sh
-ja test
-./build.sh
-```
-
-Install the resulting tool into the active JDK image:
-
-```sh
-./install.sh --force
-```
+- [Searching](https://github.com/Netflix/jist/wiki/Searching)
+- [Reading source](https://github.com/Netflix/jist/wiki/Reading-Source)
+- [Controlling output](https://github.com/Netflix/jist/wiki/Controlling-Output)
+- [Project integration](https://github.com/Netflix/jist/wiki/Project-Integration)

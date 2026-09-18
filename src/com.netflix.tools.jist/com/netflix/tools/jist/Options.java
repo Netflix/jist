@@ -149,6 +149,7 @@ public record Options(
                   <symbol|source-or-class-file>           Exact simple name, qualified symbol
                                                             prefix, source file, or class file
                   @<file>                                 Read options from file
+                  -C <directory>                          Run in the specified directory
                   -cp, -classpath, --class-path <path>    Where to find unnamed-module classes
                   -p, --module-path <path>                Where to find application modules
                   -sourcepath, --source-path <path>       Where to find source files

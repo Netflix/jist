@@ -73,6 +73,7 @@ class HelpTest {
         assertEquals(1, checker.isSupportedOption("--source"));
         assertEquals(1, checker.isSupportedOption("-classpath"));
         assertEquals(0, checker.isSupportedOption("-public"));
+        assertEquals(1, checker.isSupportedOption("-C"));
         assertEquals(0, checker.isSupportedOption("--version"));
 
         int exitCode = jist.run(false, new PrintWriter(output, true), new PrintWriter(error, true), "__complete",
@@ -134,7 +135,8 @@ class HelpTest {
         var output = new StringWriter();
         var error = new StringWriter();
 
-        int exitCode = new Jist().run(false, new PrintWriter(output), new PrintWriter(error), directory);
+        int exitCode = new Jist().run(false, new PrintWriter(output), new PrintWriter(error),
+                "--source", "none", "-C", directory.toString());
 
         assertEquals(0, exitCode, error.toString());
         assertTrue(output.toString().startsWith("Usage: jist "), output.toString());
@@ -157,7 +159,7 @@ class HelpTest {
     }
 
     @Test
-    void ambiguousProjectOptionsSuggestChangingDirectory(@TempDir Path directory) throws Exception {
+    void ambiguousProjectOptionsSuggestWorkingDirectoryOption(@TempDir Path directory) throws Exception {
         Path options = Files.createDirectories(directory.resolve(".java-tool-options"));
         Files.createDirectories(directory.resolve("app/src/main"));
         Files.createDirectories(directory.resolve("app/src/test"));
@@ -172,10 +174,9 @@ class HelpTest {
 
         assertEquals(1, exitCode, error.toString());
         assertEquals("", output.toString());
-        assertTrue(error.toString().contains("run from within one of:"), error.toString());
-        assertTrue(error.toString().contains("  app/src/main"), error.toString());
-        assertTrue(error.toString().contains("  app/src/test"), error.toString());
-        assertFalse(error.toString().contains("-C"), error.toString());
+        assertTrue(error.toString().contains("select one with -C:"), error.toString());
+        assertTrue(error.toString().contains("  -C app/src/main"), error.toString());
+        assertTrue(error.toString().contains("  -C app/src/test"), error.toString());
     }
 
     @Test
@@ -245,6 +246,7 @@ class HelpTest {
                   <symbol|source-or-class-file>           Exact simple name, qualified symbol
                                                             prefix, source file, or class file
                   @<file>                                 Read options from file
+                  -C <directory>                          Run in the specified directory
                   -cp, -classpath, --class-path <path>    Where to find unnamed-module classes
                   -p, --module-path <path>                Where to find application modules
                   -sourcepath, --source-path <path>       Where to find source files

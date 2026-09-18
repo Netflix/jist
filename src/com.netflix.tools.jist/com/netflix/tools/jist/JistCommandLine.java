@@ -111,6 +111,7 @@ final class JistCommandLine {
                     pretty,
                     help)
             .operand("SYMBOL|SOURCE-OR-CLASS-FILE", "Symbol prefix, source file, or class file", Cardinality.ZERO_OR_ONE)
+            .workingDirectory()
             .argumentFiles()
             .javaToolOptions()
             .version(Jist.class.getModule())

@@ -33,9 +33,10 @@ Searches use exact names rather than fuzzy matches. A simple name matches that c
 
 Follow the `ja` [Installation Guide](https://github.com/Netflix/ja#installation) to install the bundled tools, including `jist`.
 
-For standalone use, download the modular JAR from [Maven Central](https://central.sonatype.com/artifact/com.netflix/com.netflix.tools.jist). JDK 25 or later is required. Run it as module `com.netflix.tools.jist`:
+For standalone use, download the modular JAR from [Maven Central](https://central.sonatype.com/artifact/com.netflix/com.netflix.tools.jist). JDK 25 or later is required. Run it directly or as module `com.netflix.tools.jist`:
 
 ```sh
+java -jar com.netflix.tools.jist-VERSION.jar java.lang.String
 java --module-path com.netflix.tools.jist-VERSION.jar --module com.netflix.tools.jist java.lang.String
 ```
 

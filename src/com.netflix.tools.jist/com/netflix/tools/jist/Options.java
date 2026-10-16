@@ -38,6 +38,8 @@ public record Options(
         List<String> subtypes,
         List<String> supertypes,
         List<String> overrides,
+        List<String> callers,
+        List<String> callees,
         boolean direct,
         SourceScope source,
         ColorMode color,
@@ -48,8 +50,16 @@ public record Options(
         boolean breakMatches,
         boolean help) {
 
-    boolean relationships() {
+    boolean calls() {
+        return !callers.isEmpty() || !callees.isEmpty();
+    }
+
+    boolean hierarchy() {
         return !subtypes.isEmpty() || !supertypes.isEmpty() || !overrides.isEmpty();
+    }
+
+    boolean relationships() {
+        return hierarchy() || calls();
     }
 
     boolean listsMethods() {
@@ -109,6 +119,8 @@ public record Options(
                 subtypes,
                 supertypes,
                 overrides,
+                callers,
+                callees,
                 direct,
                 selectedSource,
                 color,
@@ -139,6 +151,8 @@ public record Options(
                 subtypes,
                 supertypes,
                 overrides,
+                callers,
+                callees,
                 direct,
                 source,
                 color,
@@ -199,6 +213,8 @@ public record Options(
                   --subtypes <type>                       Find extending or implementing types; repeatable
                   --supertypes <type>                     Find parent types; repeatable
                   --overrides <member>                    Find overriding method declarations; repeatable
+                  --callers <member>                      Find invocation sites calling a member; repeatable
+                  --callees <member>                      Find invocations within a member; repeatable
                   --direct                                Include only direct relationships
 
                 Output:

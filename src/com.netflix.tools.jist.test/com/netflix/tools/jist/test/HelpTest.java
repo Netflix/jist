@@ -284,6 +284,8 @@ class HelpTest {
                   --subtypes <type>                       Find extending or implementing types; repeatable
                   --supertypes <type>                     Find parent types; repeatable
                   --overrides <member>                    Find overriding method declarations; repeatable
+                  --callers <member>                      Find invocation sites calling a member; repeatable
+                  --callees <member>                      Find invocations within a member; repeatable
                   --direct                                Include only direct relationships
 
                 Output:

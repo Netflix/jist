@@ -95,11 +95,15 @@ public final class Jist implements ToolProvider, OptionChecker {
             out = formattedOutput(opts, out, err, terminal);
             var environment = new SearchEnvironment(opts);
             if (opts.relationships()) {
-                try (var relationships = RelationshipSearch.open(opts, environment)) {
+                try (var relationships = opts.hierarchy() ? RelationshipSearch.open(opts, environment) : null;
+                        var calls = opts.calls() ? CallSearch.open(opts, environment) : null) {
                     var kinds = opts.kinds().isEmpty() ? EnumSet.of(SymbolKind.TYPE, SymbolKind.METHOD) : EnumSet.copyOf(opts.kinds());
                     kinds.removeAll(EnumSet.of(SymbolKind.MODULE, SymbolKind.PACKAGE, SymbolKind.FIELD));
-                    if (!kinds.isEmpty()) {
+                    if (relationships != null && !kinds.isEmpty()) {
                         new DeclarationSearch(environment, relationships).listSourceContexts(opts.withKinds(kinds), out);
+                    }
+                    if (calls != null && (opts.kinds().isEmpty() || opts.listsMethods())) {
+                        calls.search(out);
                     }
                 }
                 return 0;

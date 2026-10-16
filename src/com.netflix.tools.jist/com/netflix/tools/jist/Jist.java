@@ -77,6 +77,16 @@ public final class Jist implements ToolProvider, OptionChecker {
                 Options.printUsage(out);
                 return 0;
             }
+            if (opts.referencedTypes() != null) {
+                if (opts.target() != null || opts.usages() || opts.relationships() || opts.direct()) {
+                    throw new ToolException(1, "--referenced-types cannot be combined with another query");
+                }
+                if (opts.source() != null && opts.source() != SourceScope.NONE) {
+                    throw new ToolException(1, "--referenced-types lists types and accepts only --source none");
+                }
+                ReferencedTypes.list(opts, new SearchEnvironment(opts), out);
+                return 0;
+            }
             if (opts.relationships() && (opts.target() != null || opts.usages())) {
                 throw new ToolException(1, "Relationship selections cannot be combined with a symbol operand or --usages");
             }

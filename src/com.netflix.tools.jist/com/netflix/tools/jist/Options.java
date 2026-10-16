@@ -40,6 +40,7 @@ public record Options(
         List<String> overrides,
         List<String> callers,
         List<String> callees,
+        String referencedTypes,
         boolean direct,
         SourceScope source,
         ColorMode color,
@@ -121,6 +122,7 @@ public record Options(
                 overrides,
                 callers,
                 callees,
+                referencedTypes,
                 direct,
                 selectedSource,
                 color,
@@ -153,6 +155,7 @@ public record Options(
                 overrides,
                 callers,
                 callees,
+                referencedTypes,
                 direct,
                 source,
                 color,
@@ -209,6 +212,7 @@ public record Options(
                                                             enum, record, annotation, method, or field
 
                 Relationships:
+                  --referenced-types <target>             List types referenced by a class or source file
                   --usages                                Find semantic usages of an exact symbol
                   --subtypes <type>                       Find extending or implementing types; repeatable
                   --supertypes <type>                     Find parent types; repeatable

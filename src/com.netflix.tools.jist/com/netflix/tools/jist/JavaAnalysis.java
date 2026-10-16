@@ -95,6 +95,33 @@ final class JavaAnalysis implements Closeable {
         }
     }
 
+    static JavaAnalysis openAttached(SearchEnvironment environment, SourceUnit source, String binaryName,
+            String moduleName) throws IOException, ToolException {
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        var diagnostics = new DiagnosticCollector<JavaFileObject>();
+        var manager = compiler.getStandardFileManager(diagnostics, Locale.ROOT, StandardCharsets.UTF_8);
+        try {
+            var arguments = new ArrayList<>(environment.compilerOptions(true, false));
+            for (var option : List.of("--source-path", "--patch-module")) {
+                int index = arguments.indexOf(option);
+                if (index >= 0) arguments.subList(index, index + 2).clear();
+            }
+            var input = new SourceModel.StringJavaFileObject(binaryName.replace('.', '/') + ".java",
+                    new String(source.bytes(), StandardCharsets.UTF_8).toCharArray());
+            var taskManager = moduleName == null ? manager : new PatchedSourceFileManager(manager, List.of(input), moduleName);
+            var task = (JavacTask) compiler.getTask(null, taskManager, diagnostics, arguments, null, List.of(input));
+            var units = new ArrayList<CompilationUnitTree>();
+            task.parse().forEach(units::add);
+            task.analyze();
+            var analysis = new JavaAnalysis(manager, diagnostics, environment, task, List.copyOf(units));
+            analysis.checkDiagnostics();
+            return analysis;
+        } catch (IOException | ToolException | RuntimeException | Error e) {
+            manager.close();
+            throw e;
+        }
+    }
+
     Elements elements() {
         return task.getElements();
     }

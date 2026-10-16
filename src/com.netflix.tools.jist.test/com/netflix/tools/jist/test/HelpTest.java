@@ -280,6 +280,7 @@ class HelpTest {
                                                             enum, record, annotation, method, or field
 
                 Relationships:
+                  --referenced-types <target>             List types referenced by a class or source file
                   --usages                                Find semantic usages of an exact symbol
                   --subtypes <type>                       Find extending or implementing types; repeatable
                   --supertypes <type>                     Find parent types; repeatable

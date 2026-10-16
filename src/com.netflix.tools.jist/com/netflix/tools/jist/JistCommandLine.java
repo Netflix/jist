@@ -53,6 +53,7 @@ final class JistCommandLine {
                     "record", "annotation", "method", "field")
             .description("Include symbols of this kind")
             .build();
+    private final ToolOption referencedTypes = option("--referenced-types", "TYPE|SOURCE-OR-CLASS-FILE", "List types referenced by a class or source file");
     private final ToolOption usages = flag("--usages", "Find semantic usages of an exact symbol");
     private final ToolOption subtypes = option("--subtypes", "TYPE", "Find extending or implementing types");
     private final ToolOption supertypes = option("--supertypes", "TYPE", "Find parent types");
@@ -101,6 +102,7 @@ final class JistCommandLine {
                     enablePreview,
                     visibility,
                     kind,
+                    referencedTypes,
                     usages,
                     subtypes,
                     supertypes,
@@ -266,6 +268,7 @@ final class JistCommandLine {
                 parsed.values(overrides),
                 parsed.values(callers),
                 parsed.values(callees),
+                last(parsed, referencedTypes),
                 parsed.contains(direct),
                 sourceScope,
                 colorMode,

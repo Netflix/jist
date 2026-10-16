@@ -39,8 +39,6 @@ import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.util.Elements;
 import javax.tools.DiagnosticCollector;
-import javax.tools.FileObject;
-import javax.tools.ForwardingJavaFileManager;
 import javax.tools.JavaFileObject;
 import javax.tools.StandardJavaFileManager;
 import javax.tools.StandardLocation;
@@ -679,7 +677,7 @@ final class UsageSearch {
                 binaryName = binaryName.substring(0, binaryName.length() - JAVA_EXT.length());
             }
             var sourceFile = new StringJavaFileObject(binaryName.replace('.', '/') + JAVA_EXT, new String(source.bytes(), StandardCharsets.UTF_8).toCharArray());
-            var taskFileManager = context.moduleName() != null ? new PatchedSourceFileManager(fileManager, List.of(sourceFile), context.moduleName()) : fileManager;
+            var taskFileManager = context.moduleName() != null ? new ModuleSourceFileManager(fileManager, List.of(sourceFile), context.moduleName()) : fileManager;
             var task = (JavacTask) compiler.getTask(null, taskFileManager, diagnostics, usageCompilerOptions(opts, enablePreview, false), null,
                     List.of(sourceFile));
             var units = task.parse().iterator();
@@ -701,74 +699,6 @@ final class UsageSearch {
     }
 
     private record AttachedSourceContext(Path root, String moduleName) {}
-
-    /**
-     * Associates selected in-memory source units with an existing module
-     * without exposing the rest of its source archive, so javac resolves
-     * dependencies from the compiled module.
-     */
-    private static final class PatchedSourceFileManager extends ForwardingJavaFileManager<StandardJavaFileManager> {
-        private final Set<URI> sources;
-        private final Location patchLocation;
-
-        PatchedSourceFileManager(StandardJavaFileManager fileManager, Collection<JavaFileObject> sources, String moduleName) {
-            super(fileManager);
-            this.sources = sources.stream()
-                    .map(FileObject::toUri)
-                    .collect(Collectors.toSet());
-            this.patchLocation = new PatchLocation(moduleName);
-        }
-
-        @Override
-        public boolean hasLocation(Location location) {
-            return location == StandardLocation.PATCH_MODULE_PATH || super.hasLocation(location);
-        }
-
-        @Override
-        public Location getLocationForModule(Location location, JavaFileObject file) throws IOException {
-            if (location == StandardLocation.PATCH_MODULE_PATH && sources.contains(file.toUri())) {
-                return patchLocation;
-            }
-            return super.getLocationForModule(location, file);
-        }
-
-        @Override
-        public Location getLocationForModule(Location location, String moduleName) throws IOException {
-            if (location == StandardLocation.PATCH_MODULE_PATH && moduleName.equals(inferModuleName(patchLocation))) {
-                return patchLocation;
-            }
-            return super.getLocationForModule(location, moduleName);
-        }
-
-        @Override
-        public String inferModuleName(Location location) throws IOException {
-            return location == patchLocation ? ((PatchLocation) patchLocation).moduleName() : super.inferModuleName(location);
-        }
-
-        @Override
-        public Iterable<JavaFileObject> list(Location location, String packageName, Set<JavaFileObject.Kind> kinds,
-                boolean recurse)
-                throws IOException {
-            return location == patchLocation ? List.of() : super.list(location, packageName, kinds, recurse);
-        }
-
-        private record PatchLocation(String moduleName) implements Location {
-            @Override
-            public String getName() {
-                return "PATCH_MODULE_PATH[" + moduleName + "]";
-            }
-
-            @Override
-            public boolean isOutputLocation() {
-                return false;
-            }
-
-            @Override
-            public boolean isModuleOrientedLocation() {
-                return false;
-            }
-        }
-    }
 
     private boolean scanUsages(Path sourceFile, Options opts, UsageTarget target,
             UsageOutput out, boolean enablePreview)

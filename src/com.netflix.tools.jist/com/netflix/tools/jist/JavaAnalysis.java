@@ -108,7 +108,7 @@ final class JavaAnalysis implements Closeable {
             }
             var input = new SourceModel.StringJavaFileObject(binaryName.replace('.', '/') + ".java",
                     new String(source.bytes(), StandardCharsets.UTF_8).toCharArray());
-            var taskManager = moduleName == null ? manager : new PatchedSourceFileManager(manager, List.of(input), moduleName);
+            var taskManager = moduleName == null ? manager : new ModuleSourceFileManager(manager, List.of(input), moduleName);
             var task = (JavacTask) compiler.getTask(null, taskManager, diagnostics, arguments, null, List.of(input));
             var units = new ArrayList<CompilationUnitTree>();
             task.parse().forEach(units::add);

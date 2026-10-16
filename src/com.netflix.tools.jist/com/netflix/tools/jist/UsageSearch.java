@@ -677,7 +677,7 @@ final class UsageSearch {
                 binaryName = binaryName.substring(0, binaryName.length() - JAVA_EXT.length());
             }
             var sourceFile = new StringJavaFileObject(binaryName.replace('.', '/') + JAVA_EXT, new String(source.bytes(), StandardCharsets.UTF_8).toCharArray());
-            var taskFileManager = context.moduleName() != null ? new PatchedSourceFileManager(fileManager, List.of(sourceFile), context.moduleName()) : fileManager;
+            var taskFileManager = context.moduleName() != null ? new ModuleSourceFileManager(fileManager, List.of(sourceFile), context.moduleName()) : fileManager;
             var task = (JavacTask) compiler.getTask(null, taskFileManager, diagnostics, usageCompilerOptions(opts, enablePreview, false), null,
                     List.of(sourceFile));
             var units = task.parse().iterator();

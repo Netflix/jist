@@ -22,11 +22,18 @@ import javax.tools.JavaFileObject;
 import javax.tools.StandardJavaFileManager;
 import javax.tools.StandardLocation;
 
-final class PatchedSourceFileManager extends ForwardingJavaFileManager<StandardJavaFileManager> {
+/**
+ * Associates explicitly supplied source files with an existing named module for javac attribution.
+ *
+ * <p>Uses {@link StandardLocation#PATCH_MODULE_PATH} to establish module ownership without changing
+ * source text. Additional source files are not listed, so javac resolves dependencies from the
+ * compiled module rather than reading the rest of a source archive.
+ */
+final class ModuleSourceFileManager extends ForwardingJavaFileManager<StandardJavaFileManager> {
     private final Set<URI> sources;
     private final Location patchLocation;
 
-    PatchedSourceFileManager(StandardJavaFileManager fileManager, Collection<JavaFileObject> sources, String moduleName) {
+    ModuleSourceFileManager(StandardJavaFileManager fileManager, Collection<JavaFileObject> sources, String moduleName) {
         super(fileManager);
         this.sources = sources.stream()
                 .map(FileObject::toUri)

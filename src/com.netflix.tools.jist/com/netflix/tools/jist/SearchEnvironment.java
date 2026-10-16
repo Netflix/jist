@@ -43,6 +43,56 @@ final class SearchEnvironment {
         return resolvedModules;
     }
 
+    List<String> compilerOptions(boolean enablePreview, boolean preserveNoSystem) throws IOException, ToolException {
+        var opts = options;
+        var result = new ArrayList<String>();
+        result.add("-proc:none");
+        result.add("-implicit:none");
+        result.add("-XDshould-stop.at=ATTR");
+        if (enablePreview) {
+            result.addAll(List.of("--enable-preview", "--source",
+                    Integer.toString(Runtime.version().feature())));
+        }
+        if (opts.modulePath() != null && !opts.modulePath().isBlank()) {
+            result.addAll(List.of("--module-path", opts.modulePath()));
+        }
+        if (opts.classPath() != null && !opts.classPath().isBlank()) {
+            result.addAll(List.of("--class-path", opts.classPath()));
+        }
+        var selected = selectedModules(opts);
+        if (!selected.isEmpty()) {
+            result.addAll(List.of("--add-modules", String.join(",", selected)));
+        }
+        if (opts.addModules() != null) {
+            result.addAll(List.of("--add-modules", opts.addModules()));
+        }
+        for (var value : opts.addExports()) {
+            result.addAll(List.of("--add-exports", value));
+        }
+        for (var value : opts.addReads()) {
+            result.addAll(List.of("--add-reads", value));
+        }
+        if (opts.limitModules() != null) {
+            result.addAll(List.of("--limit-modules", opts.limitModules()));
+        }
+        var directories = sourceRoots()
+                .stream()
+                .filter(Files::isDirectory)
+                .map(Path::toString)
+                .collect(Collectors.joining(File.pathSeparator));
+        if (!directories.isEmpty()) {
+            if (selected.size() == 1) {
+                result.addAll(List.of("--patch-module", selected.getFirst() + "=" + directories));
+            } else {
+                result.addAll(List.of("--source-path", directories));
+            }
+        }
+        if (opts.system() != null && (preserveNoSystem || !opts.system().equals("none"))) {
+            result.addAll(List.of("--system", opts.system()));
+        }
+        return List.copyOf(result);
+    }
+
     static String listedClassName(String resourceName) {
         if (!resourceName.endsWith(CLASS_EXT) || resourceName.startsWith(META_INF))
             return null;

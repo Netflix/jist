@@ -27,7 +27,7 @@ import java.util.List;
 import java.util.Map;
 import javax.tools.ToolProvider;
 
-import com.netflix.tools.jist.Access;
+import com.netflix.tools.jist.Visibility;
 import com.netflix.tools.jist.SourceModel;
 import com.netflix.tools.jist.SourceModel.Attribution;
 import com.netflix.tools.jist.SourceModel.SourceSpan;
@@ -467,7 +467,7 @@ class SourceModelTest {
             });
         }
 
-        return model.attributions(classes, Access.PRIVATE);
+        return model.attributions(classes, Visibility.ALL);
     }
 
     private static String slice(String source, SourceSpan span) {

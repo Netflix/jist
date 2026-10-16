@@ -32,9 +32,13 @@ public record Options(
         List<String> addExports,
         List<String> addReads,
         String limitModules,
-        Access access,
+        Visibility visibility,
         Set<SymbolKind> kinds,
         boolean usages,
+        List<String> subtypes,
+        List<String> supertypes,
+        List<String> overrides,
+        boolean direct,
         SourceScope source,
         ColorMode color,
         Boolean heading,
@@ -43,6 +47,10 @@ public record Options(
         boolean lineNumber,
         boolean breakMatches,
         boolean help) {
+
+    boolean relationships() {
+        return !subtypes.isEmpty() || !supertypes.isEmpty() || !overrides.isEmpty();
+    }
 
     boolean listsMethods() {
         return kinds.contains(SymbolKind.METHOD);
@@ -95,9 +103,13 @@ public record Options(
                 addExports,
                 addReads,
                 limitModules,
-                access,
+                visibility,
                 kinds,
                 usages,
+                subtypes,
+                supertypes,
+                overrides,
+                direct,
                 selectedSource,
                 color,
                 heading,
@@ -121,9 +133,13 @@ public record Options(
                 addExports,
                 addReads,
                 limitModules,
-                access,
+                visibility,
                 Set.copyOf(selectedKinds),
                 usages,
+                subtypes,
+                supertypes,
+                overrides,
+                direct,
                 source,
                 color,
                 heading,
@@ -169,10 +185,9 @@ public record Options(
                   --limit-modules <M,...>                 Restrict all observable modules
 
                 Visibility:
-                  -public                                 Show public symbols
-                  -protected                              Show public and protected symbols
-                  -package                                Exclude private symbols
-                  -private                                Show all symbols
+                  --visibility <visibility>              Include declarations with this visibility;
+                                                            repeatable: public, protected, package,
+                                                            private, or all
 
                 Search:
                   -k, --kind <kind>                       Include symbols of this kind; repeatable
@@ -181,6 +196,10 @@ public record Options(
 
                 Relationships:
                   --usages                                Find semantic usages of an exact symbol
+                  --subtypes <type>                       Find extending or implementing types; repeatable
+                  --supertypes <type>                     Find parent types; repeatable
+                  --overrides <member>                    Find overriding method declarations; repeatable
+                  --direct                                Include only direct relationships
 
                 Output:
                   --heading                               Group results under source headings

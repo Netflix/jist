@@ -75,7 +75,6 @@ import static com.netflix.tools.jist.DeclarationSearch.warnSourceUnavailable;
 import static com.netflix.tools.jist.SearchEnvironment.parsePathList;
 import static com.netflix.tools.jist.SearchEnvironment.readsUnnamedModule;
 import static com.netflix.tools.jist.SearchEnvironment.resolveClass;
-import static com.netflix.tools.jist.SearchEnvironment.selectedModules;
 import static com.netflix.tools.jist.SearchEnvironment.unitLocation;
 
 /** Finds semantic usages in ClassFiles and source. */
@@ -241,7 +240,7 @@ final class UsageSearch {
             SourceLookup sources, UsageOutput out)
             throws IOException {
         var model = ClassFile.of().parse(bytes);
-        if (model.isModuleInfo() || hasOrdinarySource(model, sources.explicitPaths())) {
+        if (model.isModuleInfo() || sources.hasOrdinarySource(model)) {
             return;
         }
         var enclosingClass = displayClassName(model);
@@ -402,28 +401,6 @@ final class UsageSearch {
         }
     }
 
-    private boolean hasOrdinarySource(ClassModel model, List<Path> sourcePaths) {
-        var sourceFile = model.findAttribute(Attributes.sourceFile());
-        if (sourceFile.isEmpty() || !sourceFile.get()
-                .sourceFile()
-                .stringValue()
-                .endsWith(JAVA_EXT)) {
-            return false;
-        }
-        var internalName = model.thisClass().asInternalName();
-        var slash = internalName.lastIndexOf('/');
-        var relativePath = (slash < 0 ? "" : internalName.substring(0, slash + 1))
-                + sourceFile.get()
-                            .sourceFile()
-                            .stringValue();
-        for (var root : sourcePaths) {
-            if (Files.isDirectory(root) && Files.isRegularFile(root.resolve(relativePath))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private static boolean matchesCompiledInstruction(UsageTarget target, ClassModel model, Instruction instruction) {
         if (instruction instanceof InvokeInstruction invoke) {
             var name = invoke.name().stringValue();
@@ -534,17 +511,17 @@ final class UsageSearch {
             throw new ToolException(1, "Class not found: " + query.path());
         }
 
-        var access = opts.access() != null
-                ? opts.access()
-                : query.member() != null ? Access.PRIVATE : Access.PROTECTED;
-        var keys = resolved != null ? usageKeys(resolved.classes(), binaryName, query.member(), access) : usageKeys(sourceFile, binaryName, query.member(), access);
+        var visibility = opts.visibility() != null
+                ? opts.visibility()
+                : query.member() != null ? Visibility.ALL : Visibility.LIBRARY;
+        var keys = resolved != null ? usageKeys(resolved.classes(), binaryName, query.member(), visibility) : usageKeys(sourceFile, binaryName, query.member(), visibility);
         if (keys.isEmpty()) {
             throw new ToolException(1, "Member not found: " + binaryName + "." + query.member());
         }
         var bytecodeTypes = resolved != null ? usageTypeInternalNames(resolved.classes(), binaryName, query.member()) : Set.<String>of();
         var bytecodeOwners = resolved != null ? usageOwnerInternalNames(resolved.classes(), binaryName) : Set.<String>of();
-        var bytecodeMethods = resolved != null ? usageBytecodeMethods(resolved.classes(), binaryName, query.member(), access) : Set.<BytecodeMethodKey>of();
-        var bytecodeFields = resolved != null ? usageBytecodeFields(resolved.classes(), binaryName, query.member(), access) : Set.<BytecodeFieldKey>of();
+        var bytecodeMethods = resolved != null ? usageBytecodeMethods(resolved.classes(), binaryName, query.member(), visibility) : Set.<BytecodeMethodKey>of();
+        var bytecodeFields = resolved != null ? usageBytecodeFields(resolved.classes(), binaryName, query.member(), visibility) : Set.<BytecodeFieldKey>of();
         var typeNeedles = bytecodeTypes.stream()
                 .map(name -> name.getBytes(StandardCharsets.UTF_8))
                 .toList();
@@ -574,7 +551,7 @@ final class UsageSearch {
     }
 
     private static Set<UsageKey> usageKeys(List<ClassModel> classes, String binaryName, String member,
-            Access access) {
+            Visibility visibility) {
         var canonicalName = binaryName.replace('$', '.');
         var selected = classes.stream()
                 .filter(model -> displayClassName(model).equals(canonicalName))
@@ -589,12 +566,12 @@ final class UsageSearch {
 
         var keys = new HashSet<UsageKey>();
         for (var field : selected.fields()) {
-            if (!field.flags().has(AccessFlag.SYNTHETIC) && access.visible(field.flags()) && field.fieldName().equalsString(member)) {
+            if (!field.flags().has(AccessFlag.SYNTHETIC) && visibility.visible(field.flags()) && field.fieldName().equalsString(member)) {
                 keys.add(new UsageKey(UsageKind.FIELD, canonicalName, member));
             }
         }
         for (var method : selected.methods()) {
-            if (method.flags().has(AccessFlag.SYNTHETIC) || method.flags().has(AccessFlag.BRIDGE) || !access.visible(method.flags())) {
+            if (method.flags().has(AccessFlag.SYNTHETIC) || method.flags().has(AccessFlag.BRIDGE) || !visibility.visible(method.flags())) {
                 continue;
             }
             var methodName = method.methodName().stringValue();
@@ -616,7 +593,7 @@ final class UsageSearch {
             if (name.startsWith(selectedName + "$")
                     && name.indexOf('$', selectedName.length() + 1) < 0
                     && name.substring(selectedName.length() + 1).equals(member)
-                    && access.visible(listedClassFlags(model))) {
+                    && visibility.visible(listedClassFlags(model))) {
                 keys.add(new UsageKey(UsageKind.TYPE, displayClassName(model), null));
             }
         }
@@ -660,7 +637,7 @@ final class UsageSearch {
     }
 
     private static Set<BytecodeMethodKey> usageBytecodeMethods(List<ClassModel> classes, String binaryName, String member,
-            Access access) {
+            Visibility visibility) {
         if (member == null) {
             return Set.of();
         }
@@ -674,7 +651,7 @@ final class UsageSearch {
         }
         var result = new HashSet<BytecodeMethodKey>();
         for (var method : selected.methods()) {
-            if (method.flags().has(AccessFlag.SYNTHETIC) || method.flags().has(AccessFlag.BRIDGE) || !access.visible(method.flags())) {
+            if (method.flags().has(AccessFlag.SYNTHETIC) || method.flags().has(AccessFlag.BRIDGE) || !visibility.visible(method.flags())) {
                 continue;
             }
             var name = method.methodName().stringValue();
@@ -695,7 +672,7 @@ final class UsageSearch {
     }
 
     private static Set<BytecodeFieldKey> usageBytecodeFields(List<ClassModel> classes, String binaryName, String member,
-            Access access) {
+            Visibility visibility) {
         if (member == null) {
             return Set.of();
         }
@@ -709,7 +686,7 @@ final class UsageSearch {
         }
         return selected.fields().stream()
                 .filter(field -> !field.flags().has(AccessFlag.SYNTHETIC))
-                .filter(field -> access.visible(field.flags()))
+                .filter(field -> visibility.visible(field.flags()))
                 .filter(field -> field.fieldName().equalsString(member))
                 .map(
                         field -> new BytecodeFieldKey(selected.thisClass().asInternalName(), member,
@@ -718,10 +695,10 @@ final class UsageSearch {
     }
 
     private Set<UsageKey> usageKeys(Path sourceFile, String binaryName, String member,
-            Access access)
+            Visibility visibility)
             throws IOException {
         var model = SourceModel.parse(Files.readAllBytes(sourceFile));
-        var structure = model.structure(sourceFile.getFileName().toString(), access,
+        var structure = model.structure(sourceFile.getFileName().toString(), visibility,
                 false);
         var owner = binaryName.replace('$', '.');
         var keys = new HashSet<UsageKey>();
@@ -926,51 +903,7 @@ final class UsageSearch {
     }
 
     private List<String> usageCompilerOptions(Options opts, boolean enablePreview, boolean preserveNoSystem) throws IOException, ToolException {
-        var result = new ArrayList<String>();
-        result.add("-proc:none");
-        result.add("-implicit:none");
-        result.add("-XDshould-stop.at=ATTR");
-        if (enablePreview) {
-            result.addAll(List.of("--enable-preview", "--source",
-                    Integer.toString(Runtime.version().feature())));
-        }
-        if (opts.modulePath() != null && !opts.modulePath().isBlank()) {
-            result.addAll(List.of("--module-path", opts.modulePath()));
-        }
-        if (opts.classPath() != null && !opts.classPath().isBlank()) {
-            result.addAll(List.of("--class-path", opts.classPath()));
-        }
-        var selectedModules = selectedModules(opts);
-        if (!selectedModules.isEmpty()) {
-            result.addAll(List.of("--add-modules", String.join(",", selectedModules)));
-        }
-        if (opts.addModules() != null) {
-            result.addAll(List.of("--add-modules", opts.addModules()));
-        }
-        for (var value : opts.addExports()) {
-            result.addAll(List.of("--add-exports", value));
-        }
-        for (var value : opts.addReads()) {
-            result.addAll(List.of("--add-reads", value));
-        }
-        if (opts.limitModules() != null) {
-            result.addAll(List.of("--limit-modules", opts.limitModules()));
-        }
-        var sourceDirectories = environment.sourceRoots().stream()
-                .filter(Files::isDirectory)
-                .map(Path::toString)
-                .collect(Collectors.joining(File.pathSeparator));
-        if (!sourceDirectories.isEmpty()) {
-            if (selectedModules.size() == 1) {
-                result.addAll(List.of("--patch-module", selectedModules.getFirst() + "=" + sourceDirectories));
-            } else {
-                result.addAll(List.of("--source-path", sourceDirectories));
-            }
-        }
-        if (opts.system() != null && (preserveNoSystem || !opts.system().equals("none"))) {
-            result.addAll(List.of("--system", opts.system()));
-        }
-        return List.copyOf(result);
+        return environment.compilerOptions(enablePreview, preserveNoSystem);
     }
 
     private static boolean requiresPreview(DiagnosticCollector<JavaFileObject> diagnostics) {
@@ -1386,7 +1319,7 @@ final class UsageSearch {
                             return new SourceUnitView(model, Map.of());
                         }
                         try {
-                            var structure = model.structure(location.sourceFileName(), Access.PRIVATE, sourceScope == SourceScope.TYPE);
+                            var structure = model.structure(location.sourceFileName(), Visibility.ALL, sourceScope == SourceScope.TYPE);
                             return new SourceUnitView(model, structure.attribution());
                         } catch (UncheckedIOException e) {
                             err.println("Error: Cannot parse usage source " + location.source().origin() + ": " + e.getMessage());

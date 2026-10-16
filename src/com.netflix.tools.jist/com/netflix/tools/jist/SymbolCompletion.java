@@ -28,13 +28,18 @@ final class SymbolCompletion {
 
     static List<Completion> complete(CompletionRequest request) {
         try {
-            var options = Options.parse(request.invocation()
-                    .arguments()
-                    .toArray(String[]::new));
+            var arguments = request.invocation().arguments();
+            var relationshipKinds = JistCommandLine.instance().relationshipCompletionKinds(request);
+            if (!relationshipKinds.isEmpty()) {
+                arguments = arguments.subList(0, arguments.size() - 1);
+            }
+            var options = Options.parse(arguments.toArray(String[]::new));
             if (options.target() != null) {
                 return List.of();
             }
-            var kinds = options.kinds().isEmpty() ? defaultKinds() : options.kinds();
+            var kinds = !relationshipKinds.isEmpty()
+                    ? relationshipKinds
+                    : options.kinds().isEmpty() ? defaultKinds() : options.kinds();
             var selected = options.withSource(null).withTargetAndKinds(parent(request.current()), kinds);
             var output = new CompletionOutput(request.current());
             new DeclarationSearch(new SearchEnvironment(selected)).listClasses(selected, output);
@@ -46,7 +51,9 @@ final class SymbolCompletion {
 
     private static String parent(String current) {
         int separator = current.lastIndexOf('.');
-        return separator <= 0 ? null : current.substring(0, separator);
+        return separator <= 0 || current.indexOf('.') == separator
+                ? null
+                : current.substring(0, separator);
     }
 
     private static final class CompletionOutput extends PrintWriter implements SymbolOutput {

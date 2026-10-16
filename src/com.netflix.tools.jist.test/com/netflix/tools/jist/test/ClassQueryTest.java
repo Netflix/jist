@@ -36,6 +36,7 @@ import javax.tools.ToolProvider;
 import com.netflix.tools.jist.Jist;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -1353,6 +1354,32 @@ class ClassQueryTest {
                        .lines()
                        .limit(3)
                        .toList());
+    }
+
+    @Test
+    void packageAnnotationsDoNotDependOnJarEntryOrder(@TempDir Path directory) throws Exception {
+        var orders = List.of(
+                List.of("modular/api/ModuleType.class", "modular/api/package-info.class", "module-info.class"),
+                List.of("module-info.class", "modular/api/package-info.class", "modular/api/ModuleType.class"));
+        for (int index = 0; index < orders.size(); index++) {
+            var archive = directory.resolve("ordered-" + index + ".jar");
+            try (var jar = new JarOutputStream(Files.newOutputStream(archive))) {
+                for (var name : orders.get(index)) {
+                    jar.putNextEntry(new JarEntry(name));
+                    Files.copy(MODULE_CLASSES.resolve(name), jar);
+                    jar.closeEntry();
+                }
+            }
+            for (var options : List.of(
+                    List.of("--class-path", archive.toString()),
+                    List.of("--module-path", archive.toString(), "--add-modules", "sample.module"))) {
+                var arguments = new java.util.ArrayList<>(options);
+                arguments.addAll(List.of("--source", "none", "--kind", "package", "modular.api"));
+                var result = run(arguments.toArray(String[]::new));
+                assertEquals(0, result.exitCode(), result.error());
+                assertEquals("modular.api: @Deprecated package modular.api;\n", result.output());
+            }
+        }
     }
 
     @Test

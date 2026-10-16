@@ -224,17 +224,31 @@ final class DeclarationSearch {
                                   .filter(candidate -> !candidate.isDirectory())
                                   .filter(candidate -> visibleClassResource(candidate.getName(), moduleName, visiblePackages, opts))
                                   .iterator();
+                var origin = "jar:" + entry.toAbsolutePath().normalize().toUri() + "!/";
                 while (iterator.hasNext()) {
                     var jarEntry = iterator.next();
+                    if (opts.kinds().isEmpty() || opts.listsPackages()) {
+                        int slash = jarEntry.getName().lastIndexOf('/');
+                        if (slash >= 0) {
+                            var packageName = jarEntry.getName().substring(0, slash).replace('/', '.');
+                            if (!emittedPackages.contains(packageName)) {
+                                var packageInfo = jar.getJarEntry(jarEntry.getName().substring(0, slash + 1) + "package-info.class");
+                                if (packageInfo != null && visibleClassResource(packageInfo.getName(), moduleName, visiblePackages, opts)) {
+                                    try (var input = jar.getInputStream(packageInfo)) {
+                                        emitClassSourceContext(opts, out, ClassFile.of().parse(input.readAllBytes()),
+                                                origin + packageInfo.getRealName(), visibility, sources, emittedSources,
+                                                emittedPackages, parsedSources);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     try (var input = jar.getInputStream(jarEntry)) {
                         emitClassSourceContext(
                                 opts,
                                 out,
                                 ClassFile.of().parse(input.readAllBytes()),
-                                "jar:" + entry.toAbsolutePath()
-                                              .normalize()
-                                              .toUri()
-                                        + "!/" + jarEntry.getRealName(),
+                                origin + jarEntry.getRealName(),
                                 visibility,
                                 sources,
                                 emittedSources,

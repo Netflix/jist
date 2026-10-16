@@ -691,7 +691,7 @@ class ClassQueryTest {
 
     @Test
     void explicitVisibilityAlsoAppliesToSourceRendering() {
-        var result = run("-public", UNCOMPILED_SOURCE.toString());
+        var result = run("--visibility", "public", UNCOMPILED_SOURCE.toString());
 
         assertEquals(0, result.exitCode(), result.error());
         assertEquals("3:public class Uncompiled {\n", result.output());
@@ -942,9 +942,9 @@ class ClassQueryTest {
     @Test
     void visibilityCanOverrideTheConsumedApiDefault() {
         var publicResult = run("--class-path", ROOT.resolve("classes").toString(),
-                "-k", "method", "-public");
+                "-k", "method", "--visibility", "public");
         var privateResult = run("--class-path", ROOT.resolve("classes").toString(),
-                "-k", "method", "-private");
+                "-k", "method", "--visibility", "all");
 
         assertAll(
                 () -> assertFalse(publicResult.output().contains("extensionPoint()"),
@@ -960,7 +960,7 @@ class ClassQueryTest {
         var consumed = run("--class-path", ROOT.resolve("classes").toString(),
                 "com.example.Example");
         var privateView = run("--class-path", ROOT.resolve("classes").toString(),
-                "-private", "com.example.Example");
+                "--visibility", "all", "com.example.Example");
 
         assertAll(
                 () -> assertFalse(consumed.output().contains("internal()"),

@@ -41,10 +41,11 @@ final class JistCommandLine {
     private final ToolOption moduleVersion = option("--module-version", "VERSION", "Set the module version");
     private final ToolOption destination = option("-d", "DIRECTORY", "Write class files to DIRECTORY");
     private final ToolOption enablePreview = flag("--enable-preview", "Enable preview language features");
-    private final ToolOption publicAccess = flag("-public", "Show public symbols");
-    private final ToolOption protectedAccess = flag("-protected", "Show public and protected symbols");
-    private final ToolOption packageAccess = flag("-package", "Exclude private symbols");
-    private final ToolOption privateAccess = flag("-private", "Show all symbols");
+    private final ToolOption visibility = ToolOption.builder("--visibility")
+            .argument("VISIBILITY")
+            .choices("public", "protected", "package", "private", "all")
+            .description("Include declarations with this visibility")
+            .build();
     private final ToolOption kind = ToolOption.builder("--kind")
             .alias("-k")
             .argument("KIND")
@@ -53,6 +54,10 @@ final class JistCommandLine {
             .description("Include symbols of this kind")
             .build();
     private final ToolOption usages = flag("--usages", "Find semantic usages of an exact symbol");
+    private final ToolOption subtypes = option("--subtypes", "TYPE", "Find extending or implementing types");
+    private final ToolOption supertypes = option("--supertypes", "TYPE", "Find parent types");
+    private final ToolOption overrides = option("--overrides", "MEMBER", "Find overriding method declarations");
+    private final ToolOption direct = flag("--direct", "Include only direct relationships");
     private final ToolOption source = ToolOption.builder("--source")
             .alias("-s")
             .argument("SCOPE")
@@ -92,12 +97,13 @@ final class JistCommandLine {
                     moduleVersion,
                     destination,
                     enablePreview,
-                    publicAccess,
-                    protectedAccess,
-                    packageAccess,
-                    privateAccess,
+                    visibility,
                     kind,
                     usages,
+                    subtypes,
+                    supertypes,
+                    overrides,
+                    direct,
                     source,
                     color,
                     heading,
@@ -162,6 +168,20 @@ final class JistCommandLine {
         return commandLine.isSupportedOption(arguments.getLast()) > 0;
     }
 
+    Set<SymbolKind> relationshipCompletionKinds(CompletionRequest request) {
+        var arguments = request.invocation().arguments();
+        if (arguments.isEmpty() || arguments.contains("--")) {
+            return Set.of();
+        }
+        var option = arguments.getLast();
+        if (overrides.names().contains(option)) {
+            return Set.of(SymbolKind.METHOD);
+        }
+        return subtypes.names().contains(option) || supertypes.names().contains(option)
+                ? Set.of(SymbolKind.TYPE)
+                : Set.of();
+    }
+
     Options parse(String... arguments) throws ToolException {
         try {
             return parse(commandLine.parse(arguments));
@@ -195,22 +215,14 @@ final class JistCommandLine {
         }
         String selectedSource = last(parsed, source);
         SourceScope sourceScope = selectedSource == null ? null : SourceScope.parse(selectedSource);
-        Access selectedAccess = null;
+        var selectedVisibility = Visibility.parse(parsed.values(visibility));
         ColorMode colorMode = ColorMode.AUTO;
         Boolean selectedHeading = null;
         boolean selectedLineNumber = true;
         boolean selectedBreakMatches = false;
         var colorValues = parsed.values(color).iterator();
         for (ToolOption occurrence : parsed.optionOccurrences()) {
-            if (occurrence == publicAccess) {
-                selectedAccess = Access.PUBLIC;
-            } else if (occurrence == protectedAccess) {
-                selectedAccess = Access.PROTECTED;
-            } else if (occurrence == packageAccess) {
-                selectedAccess = Access.PACKAGE;
-            } else if (occurrence == privateAccess) {
-                selectedAccess = Access.PRIVATE;
-            } else if (occurrence == color) {
+            if (occurrence == color) {
                 colorMode = ColorMode.parse(colorValues.next());
             } else if (occurrence == heading) {
                 selectedHeading = Boolean.TRUE;
@@ -242,9 +254,13 @@ final class JistCommandLine {
                 parsed.values(addExports),
                 parsed.values(addReads),
                 last(parsed, limitModules),
-                selectedAccess,
+                selectedVisibility,
                 Set.copyOf(kinds),
                 parsed.contains(usages),
+                parsed.values(subtypes),
+                parsed.values(supertypes),
+                parsed.values(overrides),
+                parsed.contains(direct),
                 sourceScope,
                 colorMode,
                 selectedHeading,

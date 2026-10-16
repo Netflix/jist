@@ -23,7 +23,7 @@ import java.util.Properties;
 import java.util.Set;
 import javax.tools.OptionChecker;
 
-import com.netflix.tools.jist.Access;
+import com.netflix.tools.jist.Visibility;
 import com.netflix.tools.jist.Jist;
 import com.netflix.tools.jist.Options;
 import org.junit.jupiter.api.Test;
@@ -72,7 +72,7 @@ class HelpTest {
         assertEquals(0, checker.isSupportedOption("__complete"));
         assertEquals(1, checker.isSupportedOption("--source"));
         assertEquals(1, checker.isSupportedOption("-classpath"));
-        assertEquals(0, checker.isSupportedOption("-public"));
+        assertEquals(1, checker.isSupportedOption("--visibility"));
         assertEquals(1, checker.isSupportedOption("-C"));
         assertEquals(0, checker.isSupportedOption("--version"));
 
@@ -106,10 +106,10 @@ class HelpTest {
     @Test
     void conflictingOptionsRetainLastOptionWinsSemantics() throws Exception {
         var options = Options.parse(
-                new String[] {"-private", "-public", "--no-heading", "--heading", "--no-line-number", "--line-number",
+                new String[] {"--visibility", "private", "--visibility", "public", "--no-heading", "--heading", "--no-line-number", "--line-number",
                         "--break", "--no-break", "--pretty", "--color", "never"});
 
-        assertEquals(Access.PUBLIC, options.access());
+        assertEquals(Set.of(Visibility.Level.PRIVATE, Visibility.Level.PUBLIC), options.visibility().levels());
         assertEquals(Boolean.TRUE, options.heading());
         assertTrue(options.lineNumber());
         assertFalse(options.breakMatches());
@@ -197,6 +197,10 @@ class HelpTest {
             "--add-exports",
             "--add-reads",
             "--limit-modules",
+            "--visibility",
+            "--subtypes",
+            "--supertypes",
+            "--overrides",
             "--release",
             "--module-version",
             "-d"
@@ -266,10 +270,9 @@ class HelpTest {
                   --limit-modules <M,...>                 Restrict all observable modules
 
                 Visibility:
-                  -public                                 Show public symbols
-                  -protected                              Show public and protected symbols
-                  -package                                Exclude private symbols
-                  -private                                Show all symbols
+                  --visibility <visibility>              Include declarations with this visibility;
+                                                            repeatable: public, protected, package,
+                                                            private, or all
 
                 Search:
                   -k, --kind <kind>                       Include symbols of this kind; repeatable
@@ -278,6 +281,10 @@ class HelpTest {
 
                 Relationships:
                   --usages                                Find semantic usages of an exact symbol
+                  --subtypes <type>                       Find extending or implementing types; repeatable
+                  --supertypes <type>                     Find parent types; repeatable
+                  --overrides <member>                    Find overriding method declarations; repeatable
+                  --direct                                Include only direct relationships
 
                 Output:
                   --heading                               Group results under source headings

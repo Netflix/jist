@@ -77,14 +77,33 @@ public final class Jist implements ToolProvider, OptionChecker {
                 Options.printUsage(out);
                 return 0;
             }
+            if (opts.relationships() && (opts.target() != null || opts.usages())) {
+                throw new ToolException(1, "Relationship selections cannot be combined with a symbol operand or --usages");
+            }
+            if (opts.direct() && !opts.relationships()) {
+                throw new ToolException(1, "--direct requires a relationship selection");
+            }
             if (!opts.usages()) {
                 opts = opts.withSource(
-                        opts.source() == SourceScope.NONE && opts.target() == null && !opts.qualifiedPath()
+                        opts.source() == SourceScope.NONE
+                                        && opts.target() == null
+                                        && !opts.qualifiedPath()
+                                        && !opts.relationships()
                                 ? null
                                 : opts.source() != null ? opts.source() : SourceScope.SIGNATURE);
             }
             out = formattedOutput(opts, out, err, terminal);
             var environment = new SearchEnvironment(opts);
+            if (opts.relationships()) {
+                try (var relationships = RelationshipSearch.open(opts, environment)) {
+                    var kinds = opts.kinds().isEmpty() ? EnumSet.of(SymbolKind.TYPE, SymbolKind.METHOD) : EnumSet.copyOf(opts.kinds());
+                    kinds.removeAll(EnumSet.of(SymbolKind.MODULE, SymbolKind.PACKAGE, SymbolKind.FIELD));
+                    if (!kinds.isEmpty()) {
+                        new DeclarationSearch(environment, relationships).listSourceContexts(opts.withKinds(kinds), out);
+                    }
+                }
+                return 0;
+            }
             var declarations = new DeclarationSearch(environment);
             if (opts.target() != null) {
                 if (opts.usages()) {
@@ -160,7 +179,9 @@ public final class Jist implements ToolProvider, OptionChecker {
 
     private List<Completion> complete(CompletionRequest request) {
         var syntactic = COMMAND_LINE.complete(request);
-        if (!syntactic.isEmpty() || request.current().startsWith("-") || COMMAND_LINE.completesOptionValue(request)) {
+        if (!syntactic.isEmpty()
+                || request.current().startsWith("-")
+                || COMMAND_LINE.completesOptionValue(request) && COMMAND_LINE.relationshipCompletionKinds(request).isEmpty()) {
             return syntactic;
         }
         return SymbolCompletion.complete(request);

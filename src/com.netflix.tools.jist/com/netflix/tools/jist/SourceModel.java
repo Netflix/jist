@@ -114,7 +114,7 @@ public final class SourceModel {
         return -1;
     }
 
-    public Map<String, Attribution> attributions(List<ClassModel> classes, Access access) {
+    public Map<String, Attribution> attributions(List<ClassModel> classes, Visibility visibility) {
         if (classes.isEmpty()) {
             return Map.of();
         }
@@ -130,14 +130,14 @@ public final class SourceModel {
         }
 
         var sourceName = outer.thisClass().asInternalName() + JAVA_EXT;
-        return structure(sourceName, access).attribution();
+        return structure(sourceName, visibility).attribution();
     }
 
-    SourceStructure structure(String sourceName, Access access) {
-        return structure(sourceName, access, true);
+    SourceStructure structure(String sourceName, Visibility visibility) {
+        return structure(sourceName, visibility, true);
     }
 
-    SourceStructure structure(String sourceName, Access access, boolean documentation) {
+    SourceStructure structure(String sourceName, Visibility visibility, boolean documentation) {
         var compiler = ToolProvider.getSystemJavaCompiler();
 
         try (var fileManager = compiler.getStandardFileManager(null, Locale.ROOT, StandardCharsets.UTF_8)) {
@@ -148,24 +148,27 @@ public final class SourceModel {
             var parsed = task.parse().iterator();
             if (!parsed.hasNext()) {
                 return new SourceStructure("", List.of(), Map.of(),
-                        Map.of(), Map.of());
+                        Map.of(), Map.of(), Set.of());
             }
             var unit = parsed.next();
-            var scanner = new AttributionScanner(unit, trees, documentation, access, source, sourceName);
+            var scanner = new AttributionScanner(unit, trees, documentation, visibility, source, sourceName);
             scanner.scan(unit, null);
+            var selected = new HashSet<>(scanner.result.keySet());
+            selected.removeAll(scanner.unselectedTypes);
             return new SourceStructure(
                     unit.getPackageName() != null ? unit.getPackageName().toString() : "",
                     List.copyOf(scanner.classNames),
                     Map.copyOf(scanner.result),
                     Map.copyOf(scanner.kinds),
-                    Map.copyOf(scanner.listedNames));
+                    Map.copyOf(scanner.listedNames),
+                    Set.copyOf(selected));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
     }
 
     record SourceStructure(String packageName, List<String> classNames, Map<String, Attribution> attribution,
-                           Map<String, SymbolKind> kinds, Map<String, String> listedNames) {}
+                           Map<String, SymbolKind> kinds, Map<String, String> listedNames, Set<String> selectedSymbols) {}
 
     static final class StringJavaFileObject extends SimpleJavaFileObject {
         private final char[] source;
@@ -185,23 +188,24 @@ public final class SourceModel {
         private final CompilationUnitTree unit;
         private final Trees trees;
         private final boolean documentation;
-        private final Access access;
+        private final Visibility visibility;
         private final char[] source;
         private final Map<String, Attribution> result = new HashMap<>();
         private final Map<String, SymbolKind> kinds = new HashMap<>();
         private final Map<String, String> listedNames = new HashMap<>();
         private final List<String> classNames = new ArrayList<>();
+        private final Set<String> unselectedTypes = new HashSet<>();
         private String className;
         private boolean implicitPublicMembers;
         private Map<String, Integer> methodOrdinals;
         private final boolean packageInfo;
 
         AttributionScanner(CompilationUnitTree unit, Trees trees, boolean documentation,
-                           Access access, char[] source, String sourceName) {
+                           Visibility visibility, char[] source, String sourceName) {
             this.unit = unit;
             this.trees = trees;
             this.documentation = documentation;
-            this.access = access;
+            this.visibility = visibility;
             this.source = source;
             this.packageInfo = Path.of(sourceName)
                     .getFileName()
@@ -250,15 +254,14 @@ public final class SourceModel {
             if (simpleName.isEmpty()) {
                 return null;
             }
-            if (!visible(tree.getModifiers()
-                             .getFlags(),
-                    implicitPublicMembers)) {
-                return null;
-            }
+            boolean selected = visible(tree.getModifiers().getFlags(), implicitPublicMembers);
             var binaryName = previousClass != null
                     ? previousClass + "." + simpleName
                     : unit.getPackageName() == null ? simpleName : unit.getPackageName() + "." + simpleName;
             classNames.add(binaryName);
+            if (!selected) {
+                unselectedTypes.add(binaryName);
+            }
 
             var previousImplicitPublic = implicitPublicMembers;
             var previousOrdinals = methodOrdinals;
@@ -483,12 +486,7 @@ public final class SourceModel {
         }
 
         private boolean visible(Set<Modifier> modifiers, boolean implicitlyPublic) {
-            return switch (access) {
-                case PUBLIC -> implicitlyPublic || modifiers.contains(javax.lang.model.element.Modifier.PUBLIC);
-                case PROTECTED -> implicitlyPublic || modifiers.contains(javax.lang.model.element.Modifier.PUBLIC) || modifiers.contains(javax.lang.model.element.Modifier.PROTECTED);
-                case PACKAGE -> !modifiers.contains(javax.lang.model.element.Modifier.PRIVATE);
-                case PRIVATE -> true;
-            };
+            return visibility.visibleModifiers(modifiers, implicitlyPublic);
         }
 
         private static boolean isTopLevelOrMember(TreePath path) {

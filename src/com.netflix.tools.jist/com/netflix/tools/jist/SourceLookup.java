@@ -16,6 +16,9 @@ package com.netflix.tools.jist;
 
 import module java.base;
 
+import java.lang.classfile.Attributes;
+import java.lang.classfile.ClassModel;
+
 import static com.netflix.tools.jist.SearchEnvironment.expandSourcePaths;
 import static com.netflix.tools.jist.SearchEnvironment.jrtModuleName;
 import static com.netflix.tools.jist.SearchEnvironment.unitLocation;
@@ -55,6 +58,23 @@ final class SourceLookup implements Closeable {
 
     List<Path> explicitPaths() {
         return ordinarySourceDirectories;
+    }
+
+    boolean hasOrdinarySource(ClassModel model) {
+        var sourceFile = model.findAttribute(Attributes.sourceFile());
+        if (sourceFile.isEmpty() || !sourceFile.get()
+                .sourceFile()
+                .stringValue()
+                .endsWith(JAVA_EXT)) {
+            return false;
+        }
+        var internalName = model.thisClass().asInternalName();
+        int slash = internalName.lastIndexOf('/');
+        var relativePath = (slash < 0 ? "" : internalName.substring(0, slash + 1))
+                + sourceFile.get()
+                            .sourceFile()
+                            .stringValue();
+        return ordinarySourceDirectories.stream().anyMatch(root -> Files.isRegularFile(root.resolve(relativePath)));
     }
 
     SourceUnit find(String relativePath, String classLocation) throws IOException {

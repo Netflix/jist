@@ -57,6 +57,8 @@ final class JistCommandLine {
     private final ToolOption subtypes = option("--subtypes", "TYPE", "Find extending or implementing types");
     private final ToolOption supertypes = option("--supertypes", "TYPE", "Find parent types");
     private final ToolOption overrides = option("--overrides", "MEMBER", "Find overriding method declarations");
+    private final ToolOption callers = option("--callers", "MEMBER", "Find invocation sites calling a member");
+    private final ToolOption callees = option("--callees", "MEMBER", "Find invocations within a member");
     private final ToolOption direct = flag("--direct", "Include only direct relationships");
     private final ToolOption source = ToolOption.builder("--source")
             .alias("-s")
@@ -103,6 +105,8 @@ final class JistCommandLine {
                     subtypes,
                     supertypes,
                     overrides,
+                    callers,
+                    callees,
                     direct,
                     source,
                     color,
@@ -174,7 +178,7 @@ final class JistCommandLine {
             return Set.of();
         }
         var option = arguments.getLast();
-        if (overrides.names().contains(option)) {
+        if (overrides.names().contains(option) || callers.names().contains(option) || callees.names().contains(option)) {
             return Set.of(SymbolKind.METHOD);
         }
         return subtypes.names().contains(option) || supertypes.names().contains(option)
@@ -260,6 +264,8 @@ final class JistCommandLine {
                 parsed.values(subtypes),
                 parsed.values(supertypes),
                 parsed.values(overrides),
+                parsed.values(callers),
+                parsed.values(callees),
                 parsed.contains(direct),
                 sourceScope,
                 colorMode,

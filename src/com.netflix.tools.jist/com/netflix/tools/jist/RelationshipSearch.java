@@ -23,131 +23,66 @@ import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
-import javax.tools.Diagnostic.Kind;
-import javax.tools.DiagnosticCollector;
-import javax.tools.JavaFileObject;
-import javax.tools.StandardJavaFileManager;
-import javax.tools.StandardLocation;
-import javax.tools.ToolProvider;
 
-import com.netflix.tools.jist.SourceModel.StringJavaFileObject;
-import com.sun.source.util.JavacTask;
 
 /** Matches declaration relationships in one compilation context. */
 final class RelationshipSearch implements Closeable {
-    private final StandardJavaFileManager fileManager;
+    private final JavaAnalysis analysis;
     private final Elements elements;
-    private final DiagnosticCollector<JavaFileObject> diagnostics;
     private final boolean direct;
     private final List<TypeElement> subtypes = new ArrayList<>();
     private final Set<String> supertypes = new HashSet<>();
     private final List<ExecutableElement> overrides = new ArrayList<>();
 
-    private RelationshipSearch(StandardJavaFileManager fileManager, Elements elements, DiagnosticCollector<JavaFileObject> diagnostics,
-            boolean direct) {
-        this.fileManager = fileManager;
-        this.elements = elements;
-        this.diagnostics = diagnostics;
+    private RelationshipSearch(JavaAnalysis analysis, boolean direct) {
+        this.analysis = analysis;
+        this.elements = analysis.elements();
         this.direct = direct;
     }
 
     static RelationshipSearch open(Options options, SearchEnvironment environment) throws IOException, ToolException {
-        var compiler = ToolProvider.getSystemJavaCompiler();
-        var diagnostics = new DiagnosticCollector<JavaFileObject>();
-        var manager = compiler.getStandardFileManager(diagnostics, Locale.ROOT, StandardCharsets.UTF_8);
+        var analysis = JavaAnalysis.open(options, environment, List.of());
         try {
-            var arguments = new ArrayList<>(environment.compilerOptions(true, false));
-            arguments.add("-Xprefer:source");
-            var descriptors = environment.moduleSourceInputs()
-                    .stream()
-                    .map(input -> input.location().resolve("module-info.java"))
-                    .filter(Files::isRegularFile)
-                    .toList();
-            if (descriptors.size() > 1) {
-                int sourcePath = arguments.indexOf("--source-path");
-                if (sourcePath >= 0) {
-                    arguments.subList(sourcePath, sourcePath + 2).clear();
-                }
-                for (var path : options.moduleSourcePaths()) {
-                    arguments.addAll(List.of("--module-source-path", path));
-                }
-                // javac requires an output location for multiple modules; analyze never writes ClassFiles.
-                manager.setLocationFromPaths(StandardLocation.CLASS_OUTPUT, List.of(Path.of(System.getProperty("java.io.tmpdir"))));
-            }
-            Iterable<? extends JavaFileObject> units = descriptors.isEmpty() ? List.of(new StringJavaFileObject("__JistRelationships.java", "".toCharArray())) : manager.getJavaFileObjectsFromPaths(descriptors);
-            var task = (JavacTask) compiler.getTask(null, manager, diagnostics, arguments, null, units);
-            task.parse();
-            task.analyze();
-            var search = new RelationshipSearch(manager, task.getElements(), diagnostics, options.direct());
-            search.checkDiagnostics();
+            var search = new RelationshipSearch(analysis, options.direct());
             for (var name : options.subtypes()) {
-                search.subtypes.add(search.resolveType(name, environment));
+                search.subtypes.add(analysis.resolveType(name));
             }
             for (var name : options.supertypes()) {
-                var type = search.resolveType(name, environment);
-                search.parents(type, search.supertypes, !options.direct());
+                search.parents(analysis.resolveType(name), search.supertypes, !options.direct());
             }
             for (var name : options.overrides()) {
                 var selection = environment.resolveSymbolSelection(name);
                 if (selection.member() == null) {
                     throw new ToolException(1, "--overrides requires a method: " + name);
                 }
-                var type = search.resolveType(selection.path(), environment);
-                var methods = search.elements.getAllMembers(type)
-                                    .stream()
-                                    .filter(element -> element.getKind() == ElementKind.METHOD)
-                                    .map(ExecutableElement.class::cast)
-                                    .filter(method -> method.getSimpleName().contentEquals(selection.member()))
-                                    .filter(RelationshipSearch::overridable)
-                                    .toList();
+                var type = analysis.resolveType(selection.path());
+                var methods = search.elements.getAllMembers(type).stream()
+                        .filter(element -> element.getKind() == ElementKind.METHOD)
+                        .map(ExecutableElement.class::cast)
+                        .filter(method -> method.getSimpleName().contentEquals(selection.member()))
+                        .filter(RelationshipSearch::overridable)
+                        .toList();
                 if (methods.isEmpty()) {
                     throw new ToolException(1, "No overridable method: " + name);
                 }
                 search.overrides.addAll(methods);
             }
-            search.checkDiagnostics();
+            analysis.checkDiagnostics();
             return search;
         } catch (IOException | ToolException | RuntimeException | Error e) {
-            manager.close();
+            analysis.close();
             throw e;
         }
     }
 
-    private TypeElement resolveType(String name, SearchEnvironment environment) throws IOException, ToolException {
-        var selection = environment.resolveSymbolSelection(name);
-        if (selection.member() != null || !environment.classTargetExists(name)) {
-            throw new ToolException(1, "Type not found: " + name);
-        }
-        var source = environment.resolveSourceFile(name);
-        if (source != null) {
-            var fileName = source.getFileName().toString();
-            var structure = SourceModel.parse(Files.readAllBytes(source)).structure(fileName, Visibility.ALL, false);
-            readSourceUnit(DeclarationSearch.sourceUnitName(structure, fileName));
-        }
-        var type = elements.getTypeElement(name);
-        if (type == null) {
-            throw new ToolException(1, "Cannot resolve type: " + name);
-        }
-        return type;
-    }
-
     void readSourceUnit(String name) throws ToolException {
-        elements.getTypeElement(name);
-        checkDiagnostics();
+        analysis.readSourceUnit(name);
     }
 
     boolean matches(String key, SymbolKind kind) throws ToolException {
         boolean result = matchesDeclaration(key, kind);
-        checkDiagnostics();
+        analysis.checkDiagnostics();
         return result;
-    }
-
-    private void checkDiagnostics() throws ToolException {
-        for (var diagnostic : diagnostics.getDiagnostics()) {
-            if (diagnostic.getKind() == Kind.ERROR) {
-                throw new ToolException(2, "Cannot resolve relationships: " + diagnostic.getMessage(Locale.ROOT));
-            }
-        }
     }
 
     private boolean matchesDeclaration(String key, SymbolKind kind) {
@@ -243,6 +178,6 @@ final class RelationshipSearch implements Closeable {
 
     @Override
     public void close() throws IOException {
-        fileManager.close();
+        analysis.close();
     }
 }

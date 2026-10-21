@@ -28,7 +28,6 @@ import javax.tools.Diagnostic.Kind;
 import javax.tools.DiagnosticCollector;
 import javax.tools.JavaFileObject;
 import javax.tools.StandardJavaFileManager;
-import javax.tools.StandardLocation;
 import javax.tools.ToolProvider;
 
 import com.sun.source.tree.CompilationUnitTree;
@@ -58,25 +57,12 @@ final class JavaAnalysis implements Closeable {
         var diagnostics = new DiagnosticCollector<JavaFileObject>();
         var manager = compiler.getStandardFileManager(diagnostics, Locale.ROOT, StandardCharsets.UTF_8);
         try {
-            var arguments = new ArrayList<>(environment.compilerOptions(true, false));
+            var arguments = new ArrayList<>(environment.sourceCompilerOptions(manager, true, false));
             arguments.add("-Xprefer:source");
             var descriptors = environment.moduleSourceInputs().stream()
                     .map(input -> input.location().resolve("module-info.java"))
                     .filter(Files::isRegularFile)
                     .toList();
-            if (!options.moduleSourcePaths().isEmpty()) {
-                for (var option : List.of("--source-path", "--patch-module")) {
-                    int index = arguments.indexOf(option);
-                    if (index >= 0) {
-                        arguments.subList(index, index + 2).clear();
-                    }
-                }
-                for (var path : options.moduleSourcePaths()) {
-                    arguments.addAll(List.of("--module-source-path", path));
-                }
-                // javac requires an output location with --module-source-path; analyze never writes ClassFiles.
-                manager.setLocationFromPaths(StandardLocation.CLASS_OUTPUT, List.of(Path.of(System.getProperty("java.io.tmpdir"))));
-            }
             var files = new LinkedHashSet<>(descriptors);
             files.addAll(sourceFiles);
             Iterable<? extends JavaFileObject> inputs = files.isEmpty()

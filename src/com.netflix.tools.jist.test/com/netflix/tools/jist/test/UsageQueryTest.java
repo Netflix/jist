@@ -29,6 +29,7 @@ import javax.tools.ToolProvider;
 import com.netflix.tools.jist.Jist;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -586,6 +587,30 @@ class UsageQueryTest {
         assertEquals(
                 List.of(row("com.example.PendingUse.use", PENDING_USE, lineContaining(PENDING_USE, "pending.work()"))),
                 usageRows(result.output()));
+    }
+
+    @Test
+    void attributesUsagesInUncompiledModuleSources(@TempDir Path directory) throws Exception {
+        var module = Files.createDirectories(directory.resolve("example.app"));
+        var source = Files.createDirectories(module.resolve("example"));
+        Files.writeString(module.resolve("module-info.java"), "module example.app { exports example; }");
+        Files.writeString(source.resolve("Task.java"), """
+                package example;
+                public class Task {
+                    public void run() {}
+                    public void invoke() { run(); }
+                }
+                """);
+        for (var moduleSourcePath : List.of(directory.toString(), "example.app=" + module)) {
+            var result = run("--usages", "--class-path", directory.resolve("empty").toString(),
+                    "--module-source-path", moduleSourcePath, "--module", "example.app", "example.Task.run");
+            assertEquals(0, result.exitCode(), result.error());
+            assertEquals("example.Task(Task.java:4):     public void invoke() { run(); }\n", result.output());
+            assertEquals("", result.error());
+        }
+        try (var files = Files.walk(directory)) {
+            assertFalse(files.anyMatch(path -> path.toString().endsWith(".class")));
+        }
     }
 
     @Test

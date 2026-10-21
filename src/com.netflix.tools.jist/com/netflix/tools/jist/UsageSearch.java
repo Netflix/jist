@@ -40,8 +40,6 @@ import javax.lang.model.element.VariableElement;
 import javax.lang.model.util.Elements;
 import javax.tools.DiagnosticCollector;
 import javax.tools.JavaFileObject;
-import javax.tools.StandardJavaFileManager;
-import javax.tools.StandardLocation;
 import javax.tools.ToolProvider;
 
 import com.netflix.tools.jist.Output.InteractivePrintWriter;
@@ -678,7 +676,7 @@ final class UsageSearch {
             }
             var sourceFile = new StringJavaFileObject(binaryName.replace('.', '/') + JAVA_EXT, new String(source.bytes(), StandardCharsets.UTF_8).toCharArray());
             var taskFileManager = context.moduleName() != null ? new ModuleSourceFileManager(fileManager, List.of(sourceFile), context.moduleName()) : fileManager;
-            var task = (JavacTask) compiler.getTask(null, taskFileManager, diagnostics, usageCompilerOptions(opts, enablePreview, false), null,
+            var task = (JavacTask) compiler.getTask(null, taskFileManager, diagnostics, environment.compilerOptions(enablePreview, false), null,
                     List.of(sourceFile));
             var units = task.parse().iterator();
             if (!units.hasNext()) {
@@ -706,7 +704,7 @@ final class UsageSearch {
         var compiler = ToolProvider.getSystemJavaCompiler();
         var diagnostics = new DiagnosticCollector<JavaFileObject>();
         try (var fileManager = compiler.getStandardFileManager(diagnostics, Locale.ROOT, StandardCharsets.UTF_8)) {
-            var task = (JavacTask) compiler.getTask(null, fileManager, diagnostics, usageCompilerOptions(opts, enablePreview), null,
+            var task = (JavacTask) compiler.getTask(null, fileManager, diagnostics, environment.sourceCompilerOptions(fileManager, enablePreview, true), null,
                     fileManager.getJavaFileObjects(sourceFile));
             var units = task.parse().iterator();
             if (!units.hasNext()) {
@@ -724,14 +722,6 @@ final class UsageSearch {
             scanner.flush();
             return true;
         }
-    }
-
-    private List<String> usageCompilerOptions(Options opts, boolean enablePreview) throws IOException, ToolException {
-        return usageCompilerOptions(opts, enablePreview, true);
-    }
-
-    private List<String> usageCompilerOptions(Options opts, boolean enablePreview, boolean preserveNoSystem) throws IOException, ToolException {
-        return environment.compilerOptions(enablePreview, preserveNoSystem);
     }
 
     private static boolean requiresPreview(DiagnosticCollector<JavaFileObject> diagnostics) {

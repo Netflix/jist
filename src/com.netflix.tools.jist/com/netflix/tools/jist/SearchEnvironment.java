@@ -19,6 +19,7 @@ import module java.base;
 import java.lang.classfile.ClassModel;
 import javax.tools.JavaCompiler;
 import javax.tools.StandardJavaFileManager;
+import javax.tools.StandardLocation;
 import javax.tools.ToolProvider;
 
 import com.sun.source.tree.ClassTree;
@@ -91,6 +92,23 @@ final class SearchEnvironment {
             result.addAll(List.of("--system", opts.system()));
         }
         return List.copyOf(result);
+    }
+
+    List<String> sourceCompilerOptions(StandardJavaFileManager manager, boolean enablePreview, boolean preserveNoSystem)
+            throws IOException, ToolException {
+        var arguments = new ArrayList<>(compilerOptions(enablePreview, preserveNoSystem));
+        if (!options.moduleSourcePaths().isEmpty()) {
+            for (var option : List.of("--source-path", "--patch-module")) {
+                int index = arguments.indexOf(option);
+                if (index >= 0) arguments.subList(index, index + 2).clear();
+            }
+            for (var path : options.moduleSourcePaths()) {
+                arguments.addAll(List.of("--module-source-path", path));
+            }
+            // javac requires an output location with --module-source-path; attribution never writes ClassFiles.
+            manager.setLocationFromPaths(StandardLocation.CLASS_OUTPUT, List.of(Path.of(System.getProperty("java.io.tmpdir"))));
+        }
+        return List.copyOf(arguments);
     }
 
     static String listedClassName(String resourceName) {

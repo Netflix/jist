@@ -365,7 +365,7 @@ final class SearchEnvironment {
     private static Map<String, java.lang.module.ModuleReference> referencesByName(java.lang.module.ModuleFinder finder) {
         return finder.findAll().stream()
                 .collect(Collectors.toMap(reference -> reference.descriptor().name(),
-                                          java.util.function.Function.identity(),
+                                          reference -> descriptorReference(reference.descriptor(), reference.location().orElse(null)),
                                           (first, _) -> first,
                                           LinkedHashMap::new));
     }
@@ -555,7 +555,15 @@ final class SearchEnvironment {
     }
 
     private static java.lang.module.ModuleReference descriptorReference(java.lang.module.ModuleDescriptor descriptor) {
-        return new java.lang.module.ModuleReference(descriptor, URI.create("jrt:/" + descriptor.name())) {
+        return descriptorReference(descriptor, URI.create("jrt:/" + descriptor.name()));
+    }
+
+    /**
+     * Resolves compilation graphs from descriptors without enforcing runtime module hashes.
+     * ClassFiles and sources are read separately from the resolved locations.
+     */
+    private static java.lang.module.ModuleReference descriptorReference(java.lang.module.ModuleDescriptor descriptor, URI location) {
+        return new java.lang.module.ModuleReference(descriptor, location) {
             @Override
             public java.lang.module.ModuleReader open() {
                 throw new UnsupportedOperationException();

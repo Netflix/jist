@@ -116,6 +116,44 @@ class UpgradeModulePathTest {
     }
 
     @Test
+    void compilationContextsDoNotEnforceRuntimeModuleHashes() throws Exception {
+        var sources = ROOT.resolve("hash-src");
+        var compiled = ROOT.resolve("hash-modules");
+        var jars = Files.createDirectories(ROOT.resolve("hashed"));
+        write(sources.resolve("hash.base/module-info.java"), "module hash.base {}");
+        write(sources.resolve("hash.application/module-info.java"), "module hash.application { requires hash.base; exports hash.api; }");
+        write(sources.resolve("hash.application/hash/api/Original.java"), "package hash.api; public class Original {}");
+        compile(sources, compiled, List.of("--module-source-path", sources.toString()));
+        var upgradedSources = ROOT.resolve("hash-upgrade-src");
+        var upgraded = ROOT.resolve("hash-upgrade");
+        write(upgradedSources.resolve("hash.application/module-info.java"), "module hash.application { requires hash.base; exports hash.api; }");
+        write(upgradedSources.resolve("hash.application/hash/api/Replacement.java"), "package hash.api; public class Replacement {}");
+        compile(upgradedSources, upgraded, List.of("--module-path", compiled.toString(), "--module-source-path", upgradedSources.toString()));
+        var jar = java.util.spi.ToolProvider.findFirst("jar").orElseThrow();
+        var output = new StringWriter();
+        var error = new StringWriter();
+        assertEquals(0, jar.run(new PrintWriter(output), new PrintWriter(error), "--create", "--file", jars.resolve("application.jar").toString(),
+                "-C", compiled.resolve("hash.application").toString(), "."), error.toString());
+        assertEquals(0, jar.run(new PrintWriter(output), new PrintWriter(error), "--create", "--file", jars.resolve("base.jar").toString(),
+                "--module-path", jars.toString(), "--hash-modules", "hash.application", "-C", compiled.resolve("hash.base").toString(), "."), error.toString());
+        var result = run("--module-path", jars.toString(), "--upgrade-module-path", upgraded.toString(), "--module", "hash.application",
+                "--limit-modules", "java.base,hash.base,hash.application", "--source", "none", "--kind", "type", "-l", "hash.api");
+        assertEquals(0, result.code(), result.error());
+        assertEquals("class hash.api.Replacement\n", result.output());
+    }
+
+    private static void compile(Path sources, Path output, List<String> options) throws Exception {
+        Files.createDirectories(output);
+        var arguments = new ArrayList<>(options);
+        arguments.addAll(List.of("-d", output.toString()));
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null); var files = Files.walk(sources)) {
+            assertTrue(compiler.getTask(null, manager, null, arguments, null,
+                    manager.getJavaFileObjectsFromPaths(files.filter(path -> path.toString().endsWith(".java")).toList())).call());
+        }
+    }
+
+    @Test
     void upgradePathIsDiscoverableAndUsedForCompletion() {
         assertEquals(1, new Jist().isSupportedOption("--upgrade-module-path"));
         var output = new StringWriter();

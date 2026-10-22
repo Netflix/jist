@@ -16,4 +16,6 @@ open module com.netflix.tools.jist.test {
     requires com.netflix.tools.jist;
     requires java.compiler;
     requires org.junit.jupiter; // @6.1.3
+
+    uses java.util.spi.ToolProvider;
 }

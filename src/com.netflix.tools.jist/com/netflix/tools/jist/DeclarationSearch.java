@@ -129,10 +129,10 @@ final class DeclarationSearch {
         var emittedSources = new HashSet<String>();
         var emittedPackages = new HashSet<String>();
         var parsedSources = new HashMap<String, EnumeratedSource>();
-        try (var sources = SourceLookup.open(opts.sourcePath(), environment.moduleSourceRoots(), opts.system())) {
+        try (var sources = environment.sources()) {
             if (readsUnnamedModule(opts)) {
                 for (var entry : parsePathList(opts.classPath())) {
-                    listSourceContextEntry(opts, out, entry, null, null, visibility,
+                    listSourceContextEntry(opts, out, entry, null, null, _ -> true, visibility,
                             sources, emittedSources, emittedPackages, parsedSources);
                 }
             }
@@ -150,7 +150,8 @@ final class DeclarationSearch {
                         out,
                         module.location(),
                         module.name(),
-                        module.visiblePackages(),
+                        module.selected() ? null : module.visiblePackages(),
+                        module::includesResource,
                         visibility,
                         sources,
                         emittedSources,
@@ -189,6 +190,7 @@ final class DeclarationSearch {
             Path entry,
             String moduleName,
             Set<String> visiblePackages,
+            CompiledInputs.Filter filter,
             Visibility visibility,
             SourceLookup sources,
             Set<String> emittedSources,
@@ -204,7 +206,7 @@ final class DeclarationSearch {
                         var resourceName = entry.relativize(classFile)
                                                 .toString()
                                                 .replace(File.separatorChar, '/');
-                        if (!visibleClassResource(resourceName, moduleName, visiblePackages, opts)) {
+                        if (!filter.test(resourceName) || !visibleClassResource(resourceName, moduleName, visiblePackages, opts)) {
                             return;
                         }
                         emitClassSourceContext(
@@ -227,13 +229,16 @@ final class DeclarationSearch {
                 var origin = "jar:" + entry.toAbsolutePath().normalize().toUri() + "!/";
                 while (iterator.hasNext()) {
                     var jarEntry = iterator.next();
+                    if (!filter.test(jarEntry.getName())) {
+                        continue;
+                    }
                     if (opts.kinds().isEmpty() || opts.listsPackages()) {
                         int slash = jarEntry.getName().lastIndexOf('/');
                         if (slash >= 0) {
                             var packageName = jarEntry.getName().substring(0, slash).replace('/', '.');
                             if (!emittedPackages.contains(packageName)) {
                                 var packageInfo = jar.getJarEntry(jarEntry.getName().substring(0, slash + 1) + "package-info.class");
-                                if (packageInfo != null && visibleClassResource(packageInfo.getName(), moduleName, visiblePackages, opts)) {
+                                if (packageInfo != null && filter.test(packageInfo.getName()) && visibleClassResource(packageInfo.getName(), moduleName, visiblePackages, opts)) {
                                     try (var input = jar.getInputStream(packageInfo)) {
                                         emitClassSourceContext(opts, out, ClassFile.of().parse(input.readAllBytes()),
                                                 origin + packageInfo.getRealName(), visibility, sources, emittedSources,
@@ -326,7 +331,7 @@ final class DeclarationSearch {
                         continue;
                     }
                     walkFilesInDeclarationOrder(module, classFile -> {
-                        if (!visibleClassResource(
+                        if (!environment.includesSystemResource(module.getFileName().toString(), module.relativize(classFile).toString()) || !visibleClassResource(
                                 module.relativize(classFile).toString(),
                                 module.getFileName().toString(),
                                 visiblePackages,
@@ -564,7 +569,7 @@ final class DeclarationSearch {
             walkFilesInDeclarationOrder(
                     root,
                     sourceFile -> {
-                        if (!sourceFile.toString().endsWith(JAVA_EXT)) {
+                        if (!sourceFile.toString().endsWith(JAVA_EXT) || !environment.includesSource(root, sourceFile)) {
                             return;
                         }
                         var origin = unitLocation(sourceFile);
@@ -761,7 +766,8 @@ final class DeclarationSearch {
                     walkFilesInDeclarationOrder(module,
                             file -> {
                                 var resourceName = module.relativize(file).toString();
-                                if (!isExportedClassResource(resourceName, exportedPackages)) {
+                                if (!isExportedClassResource(resourceName, exportedPackages)
+                                        || !environment.includesSystemResource(module.getFileName().toString(), resourceName)) {
                                     return;
                                 }
                                 addListedSymbols(
@@ -864,7 +870,7 @@ final class DeclarationSearch {
                             var resourceName = entry.relativize(file)
                                                     .toString()
                                                     .replace(File.separatorChar, '/');
-                            if (!isVisibleModuleClass(resourceName, module.visiblePackages())) {
+                            if (!module.visibleResource(resourceName)) {
                                 return;
                             }
                             addListedSymbols(
@@ -884,7 +890,7 @@ final class DeclarationSearch {
                                       .iterator();
                     while (iterator.hasNext()) {
                         var jarEntry = iterator.next();
-                        if (!isVisibleModuleClass(jarEntry.getName(), module.visiblePackages())) {
+                        if (!module.visibleResource(jarEntry.getName())) {
                             continue;
                         }
                         byte[] bytes = null;
@@ -918,7 +924,7 @@ final class DeclarationSearch {
                 }
                 walkFilesInDeclarationOrder(sourceRoot,
                         sourceFile -> {
-                            if (!sourceFile.toString().endsWith(JAVA_EXT)) {
+                            if (!sourceFile.toString().endsWith(JAVA_EXT) || !environment.includesSource(sourceRoot, sourceFile)) {
                                 return;
                             }
                             var task = (JavacTask) compiler.getTask(null, fileManager, null, List.of("-proc:none"), null,
@@ -1455,7 +1461,7 @@ final class DeclarationSearch {
                     .findFirst()
                     .orElse(classes.getFirst());
             if (metadataKind(outer, UsageSearch.displayClassName(outer)) != null) {
-                try (var sources = SourceLookup.open(opts.sourcePath(), environment.moduleSourceRoots(), opts.system())) {
+                try (var sources = environment.sources()) {
                     emitClassSourceContext(
                             opts.withTargetAndKinds(null, opts.kinds()),
                             out,
@@ -2045,7 +2051,7 @@ final class DeclarationSearch {
             return new SymbolSource(classLocation, null, unitName, declaredSourceFile, null,
                     Map.of(), classes);
         }
-        try (var sources = SourceLookup.open(opts.sourcePath(), environment.moduleSourceRoots(), opts.system())) {
+        try (var sources = environment.sources()) {
             var sourceFile = outer.findAttribute(Attributes.sourceFile());
             if (sourceFile.isPresent()) {
                 int slash = outerInternalName.lastIndexOf('/');

@@ -98,7 +98,7 @@ final class CallSearch implements Closeable {
     }
 
     void search(PrintWriter out) throws IOException, ToolException {
-        try (var sources = SourceLookup.open(options.sourcePath(), environment.moduleSourceRoots(), options.system())) {
+        try (var sources = environment.sources()) {
             CompiledInputs.scan(options, environment, InputStream::readAllBytes,
                     (bytes, location) -> compiled(bytes, location, sources, out));
             for (var root : sources.explicitPaths()) {
@@ -106,7 +106,10 @@ final class CallSearch implements Closeable {
                     var iterator = files.filter(path -> path.toString().endsWith(".java"))
                             .filter(path -> !path.getFileName().toString().equals("module-info.java")).iterator();
                     while (iterator.hasNext()) {
-                        source(iterator.next(), out);
+                        var file = iterator.next();
+                        if (environment.includesSource(root, file)) {
+                            source(file, out);
+                        }
                     }
                 }
             }

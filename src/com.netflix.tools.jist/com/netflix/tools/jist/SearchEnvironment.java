@@ -33,6 +33,8 @@ final class SearchEnvironment {
 
     private final Options options;
     private ModuleResolution resolvedModules;
+    private Map<String, List<Path>> parsedPatches;
+    private List<ModuleSourceInput> resolvedSourceInputs;
 
     SearchEnvironment(Options options) {
         this.options = options;
@@ -42,6 +44,12 @@ final class SearchEnvironment {
         if (resolvedModules == null)
             resolvedModules = computeModuleResolution(options);
         return resolvedModules;
+    }
+
+    private Map<String, List<Path>> patches() throws ToolException {
+        if (parsedPatches == null)
+            parsedPatches = ModulePatches.parse(options.patchModules());
+        return parsedPatches;
     }
 
     List<String> compilerOptions(boolean enablePreview, boolean preserveNoSystem) throws IOException, ToolException {
@@ -56,6 +64,9 @@ final class SearchEnvironment {
         }
         if (opts.modulePath() != null && !opts.modulePath().isBlank()) {
             result.addAll(List.of("--module-path", opts.modulePath()));
+        }
+        if (opts.upgradeModulePath() != null && !opts.upgradeModulePath().isBlank()) {
+            result.addAll(List.of("--upgrade-module-path", opts.upgradeModulePath()));
         }
         if (opts.classPath() != null && !opts.classPath().isBlank()) {
             result.addAll(List.of("--class-path", opts.classPath()));
@@ -76,17 +87,20 @@ final class SearchEnvironment {
         if (opts.limitModules() != null) {
             result.addAll(List.of("--limit-modules", opts.limitModules()));
         }
-        var directories = sourceRoots()
-                .stream()
-                .filter(Files::isDirectory)
-                .map(Path::toString)
-                .collect(Collectors.joining(File.pathSeparator));
+        var patches = new LinkedHashMap<>(patches());
+        var directories = parsePathList(opts.sourcePath()).stream().filter(Files::isDirectory).toList();
         if (!directories.isEmpty()) {
-            if (selected.size() == 1) {
-                result.addAll(List.of("--patch-module", selected.getFirst() + "=" + directories));
+            if (selected.size() == 1 && opts.moduleSourcePaths().isEmpty()) {
+                var roots = new LinkedHashSet<>(patches.getOrDefault(selected.getFirst(), List.of()));
+                roots.addAll(directories);
+                patches.put(selected.getFirst(), List.copyOf(roots));
             } else {
-                result.addAll(List.of("--source-path", directories));
+                result.addAll(List.of("--source-path", directories.stream().map(Path::toString).collect(Collectors.joining(File.pathSeparator))));
             }
+        }
+        for (var patch : patches.entrySet()) {
+            result.addAll(List.of("--patch-module", patch.getKey() + "="
+                    + patch.getValue().stream().map(Path::toString).collect(Collectors.joining(File.pathSeparator))));
         }
         if (opts.system() != null && (preserveNoSystem || !opts.system().equals("none"))) {
             result.addAll(List.of("--system", opts.system()));
@@ -98,10 +112,8 @@ final class SearchEnvironment {
             throws IOException, ToolException {
         var arguments = new ArrayList<>(compilerOptions(enablePreview, preserveNoSystem));
         if (!options.moduleSourcePaths().isEmpty()) {
-            for (var option : List.of("--source-path", "--patch-module")) {
-                int index = arguments.indexOf(option);
-                if (index >= 0) arguments.subList(index, index + 2).clear();
-            }
+            int sourcePath = arguments.indexOf("--source-path");
+            if (sourcePath >= 0) arguments.subList(sourcePath, sourcePath + 2).clear();
             for (var path : options.moduleSourcePaths()) {
                 arguments.addAll(List.of("--module-source-path", path));
             }
@@ -219,9 +231,28 @@ final class SearchEnvironment {
     record ModuleInput(String name,
                        Path location,
                        Set<String> visiblePackages,
-                       java.lang.module.ModuleDescriptor descriptor) {}
+                       java.lang.module.ModuleDescriptor descriptor,
+                       List<Path> precedingPatches,
+                       boolean patch,
+                       boolean selected) {
+        boolean includesResource(String resource) throws IOException {
+            return !(patch && resource.equals("module-info.class")) && !ModulePatches.contains(precedingPatches, resource);
+        }
 
-    record ModuleSourceInput(Path location, Set<String> visiblePackages) {}
+        boolean visibleResource(String resource) throws IOException {
+            return includesResource(resource) && (selected || isVisibleModuleClass(resource, visiblePackages));
+        }
+    }
+
+    record ModuleSourceInput(Path location, Set<String> visiblePackages, List<Path> precedingPatches, boolean patch) {
+        boolean includesResource(String resource) throws IOException {
+            if (resource.equals("module-info.java")) return !patch;
+            var slash = resource.lastIndexOf('/');
+            var packageName = slash < 0 ? "" : resource.substring(0, slash).replace('/', '.');
+            return (visiblePackages == null || visiblePackages.contains(packageName))
+                    && !ModulePatches.contains(precedingPatches, resource);
+        }
+    }
 
     record ModuleResolution(List<ModuleInput> applicationModules,
                             Map<String, Set<String>> applicationPackages,
@@ -235,25 +266,29 @@ final class SearchEnvironment {
         var entries = parsePathList(opts.modulePath());
         var applicationFinder = java.lang.module.ModuleFinder.of(entries.toArray(Path[]::new));
         var compiledReferences = referencesByName(applicationFinder);
+        var upgradeEntries = parsePathList(opts.upgradeModulePath());
+        var upgrades = referencesByName(java.lang.module.ModuleFinder.of(upgradeEntries.toArray(Path[]::new)));
+        compiledReferences.putAll(upgrades);
         var applicationReferences = new LinkedHashMap<>(compiledReferences);
         sourceModuleReferences(opts).forEach(applicationReferences::putIfAbsent);
         var systemReferences = systemModuleReferences(opts.system());
-        if (opts.limitModules() != null) {
-            var observableSystem = requirementClosure(splitModuleNames(opts.limitModules()), systemReferences);
-            selectedModules(opts).stream()
-                    .filter(systemReferences::containsKey)
-                    .forEach(observableSystem::add);
-            splitModuleNames(opts.addModules()).stream()
-                    .filter(systemReferences::containsKey)
-                    .forEach(observableSystem::add);
-            systemReferences.keySet().retainAll(observableSystem);
-        }
-
         var observable = new LinkedHashMap<String, java.lang.module.ModuleReference>();
         observable.putAll(systemReferences);
         applicationReferences.forEach(observable::putIfAbsent);
+        observable.putAll(upgrades);
+        if (opts.limitModules() != null) {
+            var limitRoots = splitModuleNames(opts.limitModules());
+            limitRoots.addAll(selectedModules(opts));
+            limitRoots.addAll(splitModuleNames(opts.addModules()));
+            var limited = requirementClosure(limitRoots, observable);
+            observable.keySet().retainAll(limited);
+        }
         var finder = new MapModuleFinder(observable);
-        var roots = moduleRoots(opts, applicationReferences.keySet(), systemReferences.keySet());
+        var applicationNames = new LinkedHashSet<>(applicationReferences.keySet());
+        applicationNames.retainAll(observable.keySet());
+        var systemNames = new LinkedHashSet<>(systemReferences.keySet());
+        systemNames.retainAll(observable.keySet());
+        var roots = moduleRoots(opts, applicationNames, systemNames);
         if (roots.isEmpty())
             return new ModuleResolution(List.of(),
                                         Map.of(),
@@ -286,6 +321,7 @@ final class SearchEnvironment {
         }
 
         var readable = readableModules(opts, configuration);
+        var patches = ModulePatches.parse(opts.patchModules());
         var applications = new ArrayList<ModuleInput>();
         var applicationPackages = new TreeMap<String, Set<String>>();
         var systems = new TreeMap<String, Set<String>>();
@@ -296,6 +332,12 @@ final class SearchEnvironment {
             if (!readable.contains(module.name()))
                 continue;
             var visiblePackages = visiblePackages(opts, configuration, module.reference().descriptor());
+            var patchRoots = patches.getOrDefault(module.name(), List.of());
+            for (int i = 0; i < patchRoots.size(); i++) {
+                applications.add(new ModuleInput(module.name(), patchRoots.get(i), visiblePackages,
+                        module.reference().descriptor(), patchRoots.subList(0, i), true, selectedModules(opts).contains(module.name())));
+            }
+            if (!patchRoots.isEmpty()) applicationPackages.put(module.name(), visiblePackages);
             if (applicationReferences.containsKey(module.name())) {
                 applicationPackages.put(module.name(), visiblePackages);
                 var location =
@@ -308,9 +350,10 @@ final class SearchEnvironment {
                     applications.add(new ModuleInput(module.name(),
                                                      Path.of(location),
                                                      visiblePackages,
-                                                     module.reference().descriptor()));
+                                                     module.reference().descriptor(), patchRoots, false, selectedModules(opts).contains(module.name())));
                 }
-            } else if (systemReferences.containsKey(module.name())) {
+            }
+            if (systemReferences.get(module.name()) == module.reference()) {
                 systems.put(module.name(), visiblePackages);
             }
         }
@@ -322,7 +365,7 @@ final class SearchEnvironment {
     private static Map<String, java.lang.module.ModuleReference> referencesByName(java.lang.module.ModuleFinder finder) {
         return finder.findAll().stream()
                 .collect(Collectors.toMap(reference -> reference.descriptor().name(),
-                                          java.util.function.Function.identity(),
+                                          reference -> descriptorReference(reference.descriptor(), reference.location().orElse(null)),
                                           (first, _) -> first,
                                           LinkedHashMap::new));
     }
@@ -512,7 +555,15 @@ final class SearchEnvironment {
     }
 
     private static java.lang.module.ModuleReference descriptorReference(java.lang.module.ModuleDescriptor descriptor) {
-        return new java.lang.module.ModuleReference(descriptor, URI.create("jrt:/" + descriptor.name())) {
+        return descriptorReference(descriptor, URI.create("jrt:/" + descriptor.name()));
+    }
+
+    /**
+     * Resolves compilation graphs from descriptors without enforcing runtime module hashes.
+     * ClassFiles and sources are read separately from the resolved locations.
+     */
+    private static java.lang.module.ModuleReference descriptorReference(java.lang.module.ModuleDescriptor descriptor, URI location) {
+        return new java.lang.module.ModuleReference(descriptor, location) {
             @Override
             public java.lang.module.ModuleReader open() {
                 throw new UnsupportedOperationException();
@@ -723,28 +774,60 @@ final class SearchEnvironment {
     }
 
     List<ModuleSourceInput> moduleSourceInputs() throws IOException, ToolException {
-        var opts = options;
-        if (opts.moduleSourcePaths().isEmpty())
-            return List.of();
-        var configured = ModuleSourcePaths.parse(opts.moduleSourcePaths());
-        var inputs = new LinkedHashMap<Path, Set<String>>();
+        if (resolvedSourceInputs == null)
+            resolvedSourceInputs = computeModuleSourceInputs();
+        return resolvedSourceInputs;
+    }
+
+    private List<ModuleSourceInput> computeModuleSourceInputs() throws IOException, ToolException {
+        var configured = ModuleSourcePaths.parse(options.moduleSourcePaths());
+        var inputs = new LinkedHashMap<Path, ModuleSourceInput>();
         var modules = modules();
-        for (var module : modules.applicationPackages().entrySet()) {
-            for (var root : configured.forModule(module.getKey())) {
-                inputs.put(root,
-                           selectedModules(opts).contains(module.getKey())
-                                   ? null
-                                   : module.getValue());
+        var packages = new TreeMap<>(modules.systemPackages());
+        packages.putAll(modules.applicationPackages());
+        var patches = patches();
+        for (var module : packages.entrySet()) {
+            var visible = selectedModules(options).contains(module.getKey()) ? null : module.getValue();
+            var roots = patches.getOrDefault(module.getKey(), List.of());
+            for (int i = 0; i < roots.size(); i++) {
+                var root = roots.get(i);
+                inputs.putIfAbsent(root, new ModuleSourceInput(root, visible, roots.subList(0, i), true));
             }
         }
-        return inputs.entrySet().stream()
-                .map(entry ->
-                        new ModuleSourceInput(entry.getKey(), entry.getValue()))
-                .toList();
+        for (var module : modules.applicationPackages().entrySet()) {
+            var visible = selectedModules(options).contains(module.getKey()) ? null : module.getValue();
+            for (var root : configured.forModule(module.getKey())) {
+                inputs.putIfAbsent(root, new ModuleSourceInput(root, visible, patches.getOrDefault(module.getKey(), List.of()), false));
+            }
+        }
+        return List.copyOf(inputs.values());
+    }
+
+    boolean includesSystemResource(String module, String resource) throws IOException, ToolException {
+        return !ModulePatches.contains(patches().getOrDefault(module, List.of()), resource);
+    }
+
+    boolean includesSource(Path root, Path source) throws IOException, ToolException {
+        var normalized = root.toAbsolutePath().normalize();
+        var resource = root.relativize(source).toString().replace(File.separatorChar, '/');
+        for (var input : moduleSourceInputs()) {
+            if (input.location().toAbsolutePath().normalize().equals(normalized)) {
+                return input.includesResource(resource);
+            }
+        }
+        var roots = moduleSourceInputs().stream().filter(ModuleSourceInput::patch).map(ModuleSourceInput::location).toList();
+        return !ModulePatches.contains(roots, resource);
+    }
+
+    SourceLookup sources() throws IOException, ToolException {
+        var patches = moduleSourceInputs().stream().filter(ModuleSourceInput::patch)
+                .map(ModuleSourceInput::location).collect(Collectors.toUnmodifiableSet());
+        return SourceLookup.open(sourceRoots(), patches, options.system());
     }
 
     List<Path> sourceRoots() throws IOException, ToolException {
         var roots = new LinkedHashSet<Path>();
+        roots.addAll(moduleSourceInputs().stream().filter(ModuleSourceInput::patch).map(ModuleSourceInput::location).toList());
         roots.addAll(parsePathList(options.sourcePath()));
         roots.addAll(moduleSourceRoots());
         return List.copyOf(roots);
@@ -758,7 +841,7 @@ final class SearchEnvironment {
                     continue;
                 for (var candidate : sourceFileCandidates(binaryName)) {
                     var sourceFile = entry.resolve(candidate);
-                    if (Files.isRegularFile(sourceFile) && sourceDeclaresClass(compiler, fileManager, sourceFile, binaryName)) {
+                    if (Files.isRegularFile(sourceFile) && includesSource(entry, sourceFile) && sourceDeclaresClass(compiler, fileManager, sourceFile, binaryName)) {
                         return sourceFile;
                     }
                 }
@@ -769,7 +852,7 @@ final class SearchEnvironment {
                                     .iterator();
                     while (iterator.hasNext()) {
                         var sourceFile = iterator.next();
-                        if (sourceDeclaresClass(compiler, fileManager, sourceFile, binaryName)) {
+                        if (includesSource(entry, sourceFile) && sourceDeclaresClass(compiler, fileManager, sourceFile, binaryName)) {
                             return sourceFile;
                         }
                     }
@@ -855,7 +938,8 @@ final class SearchEnvironment {
                     while (iterator.hasNext()) {
                         var module = iterator.next();
                         var visiblePackages = systemPackages.get(module.getFileName().toString());
-                        if (visiblePackages == null || !isVisibleModuleClass(candidate, visiblePackages))
+                        if (visiblePackages == null || !isVisibleModuleClass(candidate, visiblePackages)
+                                || !includesSystemResource(module.getFileName().toString(), candidate))
                             continue;
                         var classFile = module.resolve(candidate);
                         if (Files.isRegularFile(classFile)) {
@@ -872,36 +956,122 @@ final class SearchEnvironment {
     }
 
     ResolvedClass resolveModuleClass(String binaryName) throws IOException, ToolException {
-        var matches = new ArrayList<Map.Entry<String, ResolvedClass>>();
-        for (var module : moduleInputs()) {
-            var resolved = resolveClass(binaryName, List.of(module.location()));
-            if (resolved == null)
-                continue;
-            var visible =
-                    resolved.classes().stream()
-                            .anyMatch(model -> {
-                                var internalName = model.thisClass().asInternalName();
-                                var displayName = internalName.replace('/', '.').replace('$', '.');
-                                var packageEnd = internalName.lastIndexOf('/');
-                                var packageName = packageEnd < 0
-                                ? ""
-                                : internalName.substring(0, packageEnd).replace('/', '.');
-                                return displayName.equals(binaryName) && module.visiblePackages().contains(packageName);
-                            });
-            if (visible)
-                matches.add(Map.entry(module.name(), resolved));
+        var matches = new LinkedHashMap<String, ResolvedClass>();
+        var inputs = moduleInputs().stream().collect(Collectors.groupingBy(ModuleInput::name, LinkedHashMap::new, Collectors.toList()));
+        for (var module : inputs.entrySet()) {
+            for (var candidate : classFileCandidates(binaryName)) {
+                var classes = new LinkedHashMap<String, ClassModel>();
+                String location = null;
+                for (var input : module.getValue()) {
+                    var group = readClassGroup(input.location(), candidate, input.patch());
+                    if (group == null)
+                        continue;
+                    for (var model : group.classes()) {
+                        var name = model.thisClass().asInternalName();
+                        if (input.visibleResource(name + CLASS_EXT)) {
+                            classes.putIfAbsent(name, model);
+                            if (name.replace('/', '.').replace('$', '.').equals(binaryName)) {
+                                location = group.location();
+                            }
+                        }
+                    }
+                }
+                if (modules().systemPackages().containsKey(module.getKey())) {
+                    var original = readSystemClassGroup(module.getKey(), candidate);
+                    if (original != null) {
+                        for (var model : original.classes()) {
+                            var name = model.thisClass().asInternalName();
+                            if (isVisibleModuleClass(name + CLASS_EXT, modules().systemPackages().get(module.getKey()))
+                                    && includesSystemResource(module.getKey(), name + CLASS_EXT)) {
+                                classes.putIfAbsent(name, model);
+                                if (name.replace('/', '.').replace('$', '.').equals(binaryName)) {
+                                    location = original.location();
+                                }
+                            }
+                        }
+                    }
+                }
+                if (location != null) {
+                    matches.put(module.getKey(), new ResolvedClass(List.copyOf(classes.values()), location));
+                    break;
+                }
+            }
         }
         if (matches.size() > 1) {
-            throw new ToolException(1,
-                                    "Class "
-                                            + binaryName
-                                            + " is provided by multiple modules:\n  "
-                                            + matches.stream()
-                                                    .map(Map.Entry::getKey)
-                                                    .sorted()
-                                                    .collect(Collectors.joining("\n  ")));
+            throw new ToolException(1, "Class " + binaryName + " is provided by multiple modules:\n  "
+                    + matches.keySet().stream().sorted().collect(Collectors.joining("\n  ")));
         }
-        return matches.isEmpty() ? null : matches.getFirst().getValue();
+        return matches.isEmpty() ? null : matches.values().iterator().next();
+    }
+
+    private ResolvedClass readSystemClassGroup(String module, String candidate) throws IOException {
+        if (options.system() == null) {
+            return readClassGroup(FileSystems.getFileSystem(URI.create("jrt:/")).getPath("/modules", module), candidate, false);
+        }
+        if (!Files.isRegularFile(Path.of(options.system()).resolve("lib/modules"))) {
+            return null;
+        }
+        try (var system = FileSystems.newFileSystem(URI.create("jrt:/"), Map.of("java.home", options.system()))) {
+            return readClassGroup(system.getPath("/modules", module), candidate, false);
+        }
+    }
+
+    /** Reads a top-level type and its nested classes, including patches containing only a nested ClassFile. */
+    private static ResolvedClass readClassGroup(Path entry, String candidate, boolean patch) throws IOException {
+        var outer = candidate.substring(0, candidate.length() - CLASS_EXT.length());
+        int nested = outer.indexOf('$');
+        if (nested >= 0) outer = outer.substring(0, nested);
+        var outerName = outer;
+        var prefix = outer + "$";
+        if (Files.isDirectory(entry)) {
+            var classFile = entry.resolve(candidate);
+            if (Files.isRegularFile(classFile)) {
+                return new ResolvedClass(readClassGroup(classFile), unitLocation(classFile));
+            }
+            var outerFile = entry.resolve(outerName + CLASS_EXT);
+            if (Files.isRegularFile(outerFile)) {
+                return new ResolvedClass(readClassGroup(outerFile), unitLocation(outerFile));
+            }
+            var parent = classFile.getParent();
+            if (!patch || !Files.isDirectory(parent)) return null;
+            try (var files = Files.list(parent)) {
+                var first = files.filter(Files::isRegularFile)
+                        .filter(file -> {
+                            var resource = entry.relativize(file).toString().replace(File.separatorChar, '/');
+                            return resource.equals(outerName + CLASS_EXT) || resource.startsWith(prefix) && resource.endsWith(CLASS_EXT);
+                        })
+                        .sorted()
+                        .findFirst();
+                if (first.isPresent()) {
+                    var selected = Files.isRegularFile(classFile) ? classFile : first.orElseThrow();
+                    return new ResolvedClass(readClassGroup(selected), unitLocation(selected));
+                }
+            }
+        } else if (Files.isRegularFile(entry)) {
+            try (var jar = new JarFile(entry.toFile(), true, ZipFile.OPEN_READ, Runtime.version())) {
+                if (!patch && jar.getJarEntry(candidate) == null && jar.getJarEntry(outerName + CLASS_EXT) == null) return null;
+                var entries = jar.versionedStream()
+                        .filter(file -> !file.isDirectory())
+                        .filter(file -> file.getName().equals(outerName + CLASS_EXT)
+                                || file.getName().startsWith(prefix) && file.getName().endsWith(CLASS_EXT))
+                        .sorted(Comparator.comparing(JarEntry::getName))
+                        .toList();
+                if (!entries.isEmpty()) {
+                    var classes = new ArrayList<ClassModel>();
+                    for (var file : entries) {
+                        try (var input = jar.getInputStream(file)) {
+                            classes.add(ClassFile.of().parse(input.readAllBytes()));
+                        }
+                    }
+                    var selected = jar.getJarEntry(outerName + CLASS_EXT);
+                    if (selected == null) selected = jar.getJarEntry(candidate);
+                    if (selected == null) selected = entries.getFirst();
+                    return new ResolvedClass(List.copyOf(classes), "jar:" + entry.toAbsolutePath().normalize().toUri() + "!/"
+                            + selected.getRealName());
+                }
+            }
+        }
+        return null;
     }
 
     static ResolvedClass resolveClass(String binaryName, List<Path> entries) throws IOException {
@@ -909,44 +1079,17 @@ final class SearchEnvironment {
         for (var entry : entries) {
             if (Files.isDirectory(entry)) {
                 for (var candidate : candidates) {
-                    var classFile = entry.resolve(candidate);
-                    if (Files.isRegularFile(classFile)) {
-                        return new ResolvedClass(readClassGroup(classFile), unitLocation(classFile));
+                    var file = entry.resolve(candidate);
+                    if (Files.isRegularFile(file)) {
+                        return new ResolvedClass(readClassGroup(file), unitLocation(file));
                     }
                 }
             } else if (Files.isRegularFile(entry)) {
                 try (var jar = new JarFile(entry.toFile(), true, ZipFile.OPEN_READ, Runtime.version())) {
                     for (var candidate : candidates) {
-                        var selectedEntry = jar.getJarEntry(candidate);
-                        if (selectedEntry == null)
-                            continue;
-                        var outerName = candidate.substring(0, candidate.length() - CLASS_EXT.length());
-                        int dollar = outerName.indexOf('$');
-                        if (dollar >= 0)
-                            outerName = outerName.substring(0, dollar);
-                        var resolvedOuterName = outerName;
-                        var outerEntry = jar.getJarEntry(resolvedOuterName + CLASS_EXT);
-                        var prefix = resolvedOuterName + "$";
-                        var names =
-                                jar.stream()
-                                        .map(JarEntry::getName)
-                                        .filter(name ->
-                                                name.equals(resolvedOuterName + CLASS_EXT) || name.startsWith(prefix) && name.endsWith(CLASS_EXT))
-                                        .sorted()
-                                        .toList();
-                        var classes = new ArrayList<ClassModel>(names.size());
-                        for (var name : names) {
-                            try (var input = jar.getInputStream(jar.getJarEntry(name))) {
-                                classes.add(ClassFile.of().parse(input.readAllBytes()));
-                            }
+                        if (jar.getJarEntry(candidate) != null) {
+                            return readClassGroup(entry, candidate, false);
                         }
-                        return new ResolvedClass(classes,
-                                                 "jar:"
-                                                         + entry.toAbsolutePath()
-                                                                 .normalize()
-                                                                 .toUri()
-                                                         + "!/"
-                                                         + (outerEntry != null ? outerEntry : selectedEntry).getRealName());
                     }
                 }
             }

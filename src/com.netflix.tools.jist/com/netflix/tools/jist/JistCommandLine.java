@@ -29,6 +29,8 @@ final class JistCommandLine {
 
     private final ToolOption classPath = option("--class-path", "PATH", "Where to find unnamed-module classes", "-classpath", "-cp");
     private final ToolOption modulePath = option("--module-path", "PATH", "Where to find application modules", "-p");
+    private final ToolOption upgradeModulePath = option("--upgrade-module-path", "PATH", "Modules replacing system or application modules");
+    private final ToolOption patchModule = option("--patch-module", "MODULE=PATH", "Patch module classes or sources");
     private final ToolOption sourcePath = option("--source-path", "PATH", "Where to find source files", "-sourcepath");
     private final ToolOption moduleSourcePath = option("--module-source-path", "PATH", "Sources for multiple modules");
     private final ToolOption system = option("--system", "JDK|none", "System module location");
@@ -88,6 +90,8 @@ final class JistCommandLine {
             .options(
                     classPath,
                     modulePath,
+                    upgradeModulePath,
+                    patchModule,
                     sourcePath,
                     moduleSourcePath,
                     system,
@@ -252,6 +256,8 @@ final class JistCommandLine {
                 last(parsed, classPath),
                 last(parsed, sourcePath),
                 last(parsed, modulePath),
+                last(parsed, upgradeModulePath),
+                parsed.values(patchModule),
                 parsed.values(moduleSourcePath),
                 target,
                 last(parsed, system),

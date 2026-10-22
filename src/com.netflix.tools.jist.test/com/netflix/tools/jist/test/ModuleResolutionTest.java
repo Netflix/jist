@@ -193,6 +193,14 @@ class ModuleResolutionTest {
     }
 
     @Test
+    void limitModulesIncludesApplicationModuleDependencies() {
+        var result = run("--module-path", MODULES.toString(), "--limit-modules", "alpha.module", "--module", "alpha.module",
+                "--source", "none", "-l", "--kind", "type", "beta.api.Beta");
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals("class beta.api.Beta\n", result.output());
+    }
+
+    @Test
     void explicitSystemImageUsesItsModuleDescriptors() {
         var result = run("--system", System.getProperty("java.home"), "-s", "none", "java.lang.String.isEmpty");
 

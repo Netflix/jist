@@ -32,15 +32,20 @@ final class CompiledInputs {
         void accept(byte[] bytes, String location) throws IOException, ToolException;
     }
 
+    @FunctionalInterface
+    interface Filter {
+        boolean test(String resource) throws IOException, ToolException;
+    }
+
     static void scan(Options options, SearchEnvironment environment, Reader reader, Consumer consumer)
             throws IOException, ToolException {
         if (readsUnnamedModule(options)) {
             for (var path : parsePathList(options.classPath())) {
-                scanEntry(path, reader, consumer);
+                scanEntry(path, reader, consumer, _ -> true);
             }
         }
         for (var module : environment.moduleInputs()) {
-            scanEntry(module.location(), reader, consumer);
+            scanEntry(module.location(), reader, consumer, module::includesResource);
         }
         var modules = environment.modules().systemPackages().keySet();
         if ("none".equals(options.system()) || modules.isEmpty()) {
@@ -65,7 +70,7 @@ final class CompiledInputs {
         }
         try {
             for (var module : modules) {
-                scanEntry(system.getPath("/modules", module), reader, consumer);
+                scanEntry(system.getPath("/modules", module), reader, consumer, resource -> environment.includesSystemResource(module, resource));
             }
         } finally {
             if (close) {
@@ -74,7 +79,7 @@ final class CompiledInputs {
         }
     }
 
-    private static void scanEntry(Path path, Reader reader, Consumer consumer) throws IOException, ToolException {
+    private static void scanEntry(Path path, Reader reader, Consumer consumer, Filter filter) throws IOException, ToolException {
         if (Files.isDirectory(path)) {
             try (var files = Files.walk(path)) {
                 var iterator = files.filter(Files::isRegularFile)
@@ -82,6 +87,9 @@ final class CompiledInputs {
                         .iterator();
                 while (iterator.hasNext()) {
                     var file = iterator.next();
+                    if (!filter.test(path.relativize(file).toString().replace(File.separatorChar, '/'))) {
+                        continue;
+                    }
                     try (var input = Files.newInputStream(file)) {
                         var bytes = reader.read(input);
                         if (bytes != null) {
@@ -97,6 +105,9 @@ final class CompiledInputs {
                         .iterator();
                 while (iterator.hasNext()) {
                     var entry = iterator.next();
+                    if (!filter.test(entry.getName())) {
+                        continue;
+                    }
                     try (var input = jar.getInputStream(entry)) {
                         var bytes = reader.read(input);
                         if (bytes != null) {

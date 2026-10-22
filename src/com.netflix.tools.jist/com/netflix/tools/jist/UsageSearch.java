@@ -102,7 +102,11 @@ final class UsageSearch {
                                     .filter(path -> path.toString().endsWith(JAVA_EXT))
                                     .iterator();
                 while (iterator.hasNext()) {
-                    var sourceFile = iterator.next().toRealPath();
+                    var file = iterator.next();
+                    if (!environment.includesSource(sourceRoot, file)) {
+                        continue;
+                    }
+                    var sourceFile = file.toRealPath();
                     if (!visited.add(sourceFile)) {
                         continue;
                     }
@@ -118,7 +122,7 @@ final class UsageSearch {
     }
 
     private void scanCompiledUsages(Options opts, UsageTarget target, UsageOutput out) throws IOException, ToolException {
-        try (var sources = SourceLookup.open(opts.sourcePath(), environment.moduleSourceRoots(), opts.system())) {
+        try (var sources = environment.sources()) {
             var classReader = new UsageClassReader(target);
             out.sourceAttributor(location -> attributeAttachedSourceUnit(location, opts, target, out));
             try {

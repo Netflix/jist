@@ -32,28 +32,39 @@ final class SourceLookup implements Closeable {
     private final SourcePaths explicit;
     private final SourcePaths system;
     private final List<Path> ordinarySourceDirectories;
+    private final List<Path> descriptorPaths;
     private final Map<String, SourceUnit> cache = new HashMap<>();
 
-    private SourceLookup(SourcePaths explicit, SourcePaths system, List<Path> ordinarySourceDirectories) {
+    private SourceLookup(SourcePaths explicit, SourcePaths system, List<Path> ordinarySourceDirectories, List<Path> descriptorPaths) {
         this.explicit = explicit;
         this.system = system;
         this.ordinarySourceDirectories = ordinarySourceDirectories;
+        this.descriptorPaths = descriptorPaths;
     }
 
-    static SourceLookup open(String sourcePath, List<Path> moduleSourceRoots, String system) {
-        var configured = expandSourcePaths(sourcePath);
-        var explicitPaths = new ArrayList<Path>(configured.paths());
-        explicitPaths.addAll(moduleSourceRoots);
-        var explicit = new SourcePaths(List.copyOf(explicitPaths), configured.openFileSystems());
-        var ordinary = new ArrayList<Path>();
-        if (sourcePath != null) {
-            Arrays.stream(sourcePath.split(File.pathSeparator))
-                    .map(Path::of)
-                    .filter(Files::isDirectory)
-                    .forEach(ordinary::add);
+    static SourceLookup open(List<Path> roots, Set<Path> patches, String system) {
+        var paths = new ArrayList<Path>();
+        var descriptors = new ArrayList<Path>();
+        var archives = new ArrayList<FileSystem>();
+        try {
+            for (var root : roots) {
+                var expanded = expandSourcePaths(root.toString());
+                paths.addAll(expanded.paths());
+                archives.addAll(expanded.openFileSystems());
+                if (!patches.contains(root)) descriptors.addAll(expanded.paths());
+            }
+            var ordinary = roots.stream().filter(Files::isDirectory).toList();
+            return new SourceLookup(new SourcePaths(List.copyOf(paths), List.copyOf(archives)), openSystemSources(system), ordinary, List.copyOf(descriptors));
+        } catch (RuntimeException | Error failure) {
+            for (var archive : archives) {
+                try {
+                    archive.close();
+                } catch (IOException suppressed) {
+                    failure.addSuppressed(suppressed);
+                }
+            }
+            throw failure;
         }
-        ordinary.addAll(moduleSourceRoots);
-        return new SourceLookup(explicit, openSystemSources(system), ordinary);
     }
 
     List<Path> explicitPaths() {
@@ -121,9 +132,9 @@ final class SourceLookup implements Closeable {
     }
 
     SourceUnit findModuleInfo(String moduleName, String classLocation) throws IOException {
-        var source = find(explicit.paths(), moduleName + "/module-info.java");
+        var source = find(descriptorPaths, moduleName + "/module-info.java");
         if (source == null) {
-            for (var root : explicit.paths()) {
+            for (var root : descriptorPaths) {
                 if (root.getFileName() != null && root.getFileName()
                         .toString()
                         .equals(moduleName)) {
@@ -135,7 +146,7 @@ final class SourceLookup implements Closeable {
             }
         }
         if (source == null && jrtModuleName(classLocation) == null) {
-            source = find(explicit.paths(), "module-info.java");
+            source = find(descriptorPaths, "module-info.java");
         }
         if (source == null) {
             source = find(system.paths(), moduleName + "/module-info.java");

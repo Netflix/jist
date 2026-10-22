@@ -60,6 +60,7 @@ final class JavaAnalysis implements Closeable {
             var arguments = new ArrayList<>(environment.sourceCompilerOptions(manager, true, false));
             arguments.add("-Xprefer:source");
             var descriptors = environment.moduleSourceInputs().stream()
+                    .filter(input -> !input.patch())
                     .map(input -> input.location().resolve("module-info.java"))
                     .filter(Files::isRegularFile)
                     .toList();
@@ -88,10 +89,8 @@ final class JavaAnalysis implements Closeable {
         var manager = compiler.getStandardFileManager(diagnostics, Locale.ROOT, StandardCharsets.UTF_8);
         try {
             var arguments = new ArrayList<>(environment.compilerOptions(true, false));
-            for (var option : List.of("--source-path", "--patch-module")) {
-                int index = arguments.indexOf(option);
-                if (index >= 0) arguments.subList(index, index + 2).clear();
-            }
+            int sourcePath = arguments.indexOf("--source-path");
+            if (sourcePath >= 0) arguments.subList(sourcePath, sourcePath + 2).clear();
             var input = new SourceModel.StringJavaFileObject(binaryName.replace('.', '/') + ".java",
                     new String(source.bytes(), StandardCharsets.UTF_8).toCharArray());
             var taskManager = moduleName == null ? manager : new ModuleSourceFileManager(manager, List.of(input), moduleName);

@@ -24,6 +24,8 @@ public record Options(
         String classPath,
         String sourcePath,
         String modulePath,
+        String upgradeModulePath,
+        List<String> patchModules,
         List<String> moduleSourcePaths,
         String target,
         String system,
@@ -106,6 +108,8 @@ public record Options(
                 classPath,
                 sourcePath,
                 modulePath,
+                upgradeModulePath,
+                patchModules,
                 moduleSourcePaths,
                 target,
                 system,
@@ -139,6 +143,8 @@ public record Options(
                 classPath,
                 sourcePath,
                 modulePath,
+                upgradeModulePath,
+                patchModules,
                 moduleSourcePaths,
                 selectedTarget,
                 system,
@@ -185,6 +191,8 @@ public record Options(
                   -C <directory>                          Run in the specified directory
                   -cp, -classpath, --class-path <path>    Where to find unnamed-module classes
                   -p, --module-path <path>                Where to find application modules
+                  --upgrade-module-path <path>            Modules replacing system or application modules
+                  --patch-module <M=path>                 Patch module classes or sources; repeatable for distinct modules
                   -sourcepath, --source-path <path>       Where to find source files
                                                             (directories and source jars, searched
                                                             in order as with javac)

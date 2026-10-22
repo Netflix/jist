@@ -55,7 +55,7 @@ class HelpTest {
             assertEquals(Set.of("type", "options", "compile-time", "warmup"), properties.stringPropertyNames());
             assertEquals("list", properties.getProperty("type"));
             assertEquals(
-                    Set.of("module-path", "module-source-path", "module=list", "release", "enable-preview", "add-exports"),
+                    Set.of("module-path", "upgrade-module-path", "patch-module", "module-source-path", "module=list", "add-modules", "release", "enable-preview", "add-exports", "add-reads", "system"),
                     Set.of(properties.getProperty("options").split(",")));
             assertEquals("true", properties.getProperty("compile-time"));
             assertEquals("--aot-warmup", properties.getProperty("warmup"));
@@ -75,6 +75,11 @@ class HelpTest {
         assertEquals(1, checker.isSupportedOption("--visibility"));
         assertEquals(1, checker.isSupportedOption("-C"));
         assertEquals(0, checker.isSupportedOption("--version"));
+        for (var option : List.of("--module-path", "-p", "--upgrade-module-path", "--patch-module",
+                "--module-source-path", "--module", "-m", "--add-modules", "--add-reads", "--add-exports",
+                "--limit-modules", "--system")) {
+            assertEquals(1, checker.isSupportedOption(option), option);
+        }
 
         int exitCode = jist.run(false, new PrintWriter(output, true), new PrintWriter(error, true), "__complete",
                 "--source", "si");
@@ -187,6 +192,8 @@ class HelpTest {
             "-cp",
             "--module-path",
             "-p",
+            "--upgrade-module-path",
+            "--patch-module",
             "--source-path",
             "-sourcepath",
             "--module-source-path",
@@ -253,6 +260,8 @@ class HelpTest {
                   -C <directory>                          Run in the specified directory
                   -cp, -classpath, --class-path <path>    Where to find unnamed-module classes
                   -p, --module-path <path>                Where to find application modules
+                  --upgrade-module-path <path>            Modules replacing system or application modules
+                  --patch-module <M=path>                 Patch module classes or sources; repeatable for distinct modules
                   -sourcepath, --source-path <path>       Where to find source files
                                                             (directories and source jars, searched
                                                             in order as with javac)

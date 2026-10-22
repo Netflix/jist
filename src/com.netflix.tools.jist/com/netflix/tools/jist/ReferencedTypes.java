@@ -61,7 +61,7 @@ final class ReferencedTypes {
             }
         } else {
             try (var analysis = JavaAnalysis.open(options, environment, List.of());
-                    var sources = SourceLookup.open(options.sourcePath(), environment.moduleSourceRoots(), options.system())) {
+                    var sources = environment.sources()) {
                 for (var name : ClassReferences.collect(compiled.classes())) {
                     var referenced = resolve(options, environment, name);
                     var model = referenced == null ? null : referenced.classes().stream()

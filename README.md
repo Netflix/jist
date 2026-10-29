@@ -19,6 +19,7 @@ Capabilities include:
 - Search project source and compiled dependencies using standard Java path and module options
 - Show literal source signatures, documentation, definitions, enclosing types, or complete source files
 - Find semantic usages of an exact type or member, including overriding methods
+- Find caller and callee edges for an exact executable or every executable declared by a type
 - Produce terminal-friendly output or stable line-oriented output for other tools
 
 Searches use exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. There is no substring matching, ranking, typo correction, or implicit resolution of partially qualified names.
@@ -60,6 +61,12 @@ Find semantic references to an exact type or member:
 
 ```sh
 jist --usages java.lang.Integer.MAX_VALUE
+```
+
+Find calls to any method or constructor declared by a type:
+
+```sh
+jist --callers java.lang.String
 ```
 
 Show source documentation and the complete declaration:

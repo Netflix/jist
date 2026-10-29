@@ -77,24 +77,28 @@ final class CallSearch implements Closeable {
     private void select(List<String> targets, Set<String> selected) throws IOException, ToolException {
         for (var target : targets) {
             var selection = environment.resolveSymbolSelection(target);
-            if (selection.member() == null) {
-                throw new ToolException(1, "Expected an exact method or constructor: " + target);
-            }
             var type = analysis.resolveType(selection.path());
+            var member = selection.member();
             boolean found = false;
-            var members = selection.member().equals("new") ? type.getEnclosedElements() : analysis.elements().getAllMembers(type);
+            var members = member == null || member.equals("new")
+                    ? type.getEnclosedElements()
+                    : analysis.elements().getAllMembers(type);
             for (var element : members) {
-                if (element instanceof ExecutableElement method
-                        && (selection.member().equals("new") ? method.getKind() == ElementKind.CONSTRUCTOR
-                                : method.getSimpleName().contentEquals(selection.member()))) {
+                if (element instanceof ExecutableElement method && matches(member, method)) {
                     selected.add(analysis.key(method));
                     found = true;
                 }
             }
-            if (!found) {
+            if (member != null && !found) {
                 throw new ToolException(1, "Method not found: " + target);
             }
         }
+    }
+
+    private static boolean matches(String member, ExecutableElement method) {
+        if (member == null) return true;
+        if (member.equals("new")) return method.getKind() == ElementKind.CONSTRUCTOR;
+        return method.getSimpleName().contentEquals(member);
     }
 
     void search(PrintWriter out) throws IOException, ToolException {

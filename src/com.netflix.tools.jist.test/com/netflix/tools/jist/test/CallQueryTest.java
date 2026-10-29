@@ -104,6 +104,19 @@ class CallQueryTest {
     }
 
     @Test
+    void typeCallersPreserveEachCallerToCalleeRelationship() {
+        for (boolean source : List.of(false, true)) {
+            var result = run(source, "--callers", "example.Target", "--visibility", "all");
+            assertSuccess(result);
+            assertTrue(result.output().contains("example.Caller.run(example.Target) -> example.Target.touch()"), result.output());
+            assertTrue(result.output().contains("example.Caller.run(example.Target) -> example.Target.touch(int)"), result.output());
+            assertTrue(result.output().contains("example.Caller.run(example.Target) -> example.Target.make()"), result.output());
+            assertTrue(result.output().contains("example.Caller.run(example.Target) -> example.Target.new()"), result.output());
+            assertTrue(result.output().contains("example.Caller.inherited(example.Inherited) -> example.Target.unused()"), result.output());
+        }
+    }
+
+    @Test
     void calleesIncludeMethodsAndConstructorsButNotParameterTypesOrReferences() {
         for (boolean source : List.of(false, true)) {
             var result = run(source, "--callees", "example.Caller.run");
@@ -116,6 +129,19 @@ class CallQueryTest {
             var reference = run(source, "--callees", "example.Caller.reference");
             assertSuccess(reference);
             assertFalse(reference.output().contains("-> example.Target.touch"), reference.output());
+        }
+    }
+
+    @Test
+    void typeCalleesPreserveEachCallerToCalleeRelationship() {
+        for (boolean source : List.of(false, true)) {
+            var result = run(source, "--callees", "example.Caller", "--visibility", "all");
+            assertSuccess(result);
+            assertTrue(result.output().contains("example.Caller.run(example.Target) -> example.Target.touch()"), result.output());
+            assertTrue(result.output().contains("example.Caller.twice(example.Target) -> example.Target.touch()"), result.output());
+            assertTrue(result.output().contains("example.Caller.lambda(example.Target) -> example.Target.touch()"), result.output());
+            assertTrue(result.output().contains("example.Caller.unrelated(example.Other) -> example.Other.touch()"), result.output());
+            assertFalse(result.output().contains("example.Caller.Nested.run"), result.output());
         }
     }
 
@@ -239,7 +265,6 @@ class CallQueryTest {
     void invalidSelectionsAreRejectedBeforeAnyOutput() {
         for (var arguments : List.of(
                 List.of("--callers", "example.Target.make", "--callees", "example.Caller.missing"),
-                List.of("--callers", "example.Target"),
                 List.of("--callees", "example.Missing.run"))) {
             var result = run(false, arguments.toArray(String[]::new));
             assertEquals(1, result.code(), result.error());

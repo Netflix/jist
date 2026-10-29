@@ -225,8 +225,8 @@ public record Options(
                   --subtypes <type>                       Find extending or implementing types; repeatable
                   --supertypes <type>                     Find parent types; repeatable
                   --overrides <member>                    Find overriding method declarations; repeatable
-                  --callers <member>                      Find invocation sites calling a member; repeatable
-                  --callees <member>                      Find invocations within a member; repeatable
+                  --callers <type-or-member>              Find calls to selected executables; repeatable
+                  --callees <type-or-member>              Find calls from selected executables; repeatable
                   --direct                                Include only direct relationships
 
                 Output:

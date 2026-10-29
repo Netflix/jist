@@ -60,8 +60,8 @@ final class JistCommandLine {
     private final ToolOption subtypes = option("--subtypes", "TYPE", "Find extending or implementing types");
     private final ToolOption supertypes = option("--supertypes", "TYPE", "Find parent types");
     private final ToolOption overrides = option("--overrides", "MEMBER", "Find overriding method declarations");
-    private final ToolOption callers = option("--callers", "MEMBER", "Find invocation sites calling a member");
-    private final ToolOption callees = option("--callees", "MEMBER", "Find invocations within a member");
+    private final ToolOption callers = option("--callers", "TYPE-OR-MEMBER", "Find calls to a member or a type's declared executables");
+    private final ToolOption callees = option("--callees", "TYPE-OR-MEMBER", "Find calls from a member or a type's declared executables");
     private final ToolOption direct = flag("--direct", "Include only direct relationships");
     private final ToolOption source = ToolOption.builder("--source")
             .alias("-s")

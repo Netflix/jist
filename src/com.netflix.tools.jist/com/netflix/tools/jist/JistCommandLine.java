@@ -39,7 +39,7 @@ final class JistCommandLine {
     private final ToolOption addExports = option("--add-exports", "MODULE/PACKAGE=TARGET", "Add a module export");
     private final ToolOption addReads = option("--add-reads", "MODULE=TARGET", "Add a module read edge");
     private final ToolOption limitModules = option("--limit-modules", "MODULE[,MODULE...]", "Restrict observable modules");
-    private final ToolOption release = option("--release", "RELEASE", "Compile for the specified Java release");
+    private final ToolOption release = option("--release", "RELEASE", "Attribute source using Java SE API signatures; does not select matching JDK source");
     private final ToolOption moduleVersion = option("--module-version", "VERSION", "Set the module version");
     private final ToolOption destination = option("-d", "DIRECTORY", "Write class files to DIRECTORY");
     private final ToolOption enablePreview = flag("--enable-preview", "Enable preview language features");
@@ -261,6 +261,7 @@ final class JistCommandLine {
                 parsed.values(moduleSourcePath),
                 target,
                 last(parsed, system),
+                last(parsed, release),
                 last(parsed, module),
                 merge(parsed.values(addModules)),
                 parsed.values(addExports),

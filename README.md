@@ -75,6 +75,8 @@ Show source documentation and the complete declaration:
 jist --source definition java.lang.String.length
 ```
 
+`--release` applies javac's Java SE API signatures when Jist attributes project or attached source. It does not change the ClassFiles Jist searches or select historical JDK implementation source; when matching source is unavailable, Jist falls back to ClassFile signatures.
+
 ## Documentation
 
 The [wiki](https://github.com/Netflix/jist/wiki) covers:

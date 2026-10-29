@@ -83,8 +83,7 @@ ClassFiles are authoritative for compiled signatures. Source provides exact defi
 type, and compilation-unit ranges. Source-only declarations participate
 directly in search and exact usage lookup.
 
-JDK classes resolve from the runtime image. `<java.home>/lib/src.zip` is read on demand when
-available. Archive source stays in memory. Runtime ClassFile locations use `jrt:/` URIs.
+JDK classes resolve from the selected system image. `<java.home>/lib/src.zip` is read on demand when available. `--release` applies javac's Java SE API signatures during source attribution; it does not change the searched ClassFiles or imply matching historical JDK implementation source. Archive source stays in memory. Runtime ClassFile locations use `jrt:/` URIs.
 
 ## Output invariants
 
@@ -119,10 +118,7 @@ available. Archive source stays in memory. Runtime ClassFile locations use `jrt:
 <project>/.java-tool-options/<project-relative-source-set>/jist.args
 ```
 
-Each tool-specific argument file contains `--class-path`, `--source-path`, module options, and
-`--system` as applicable. Named source sets also include their `--module` and compiled output on the
-module path. Project directories do not imply the `main` source set. Compilation tasks finalize
-`writeJavaToolOptions`; no stubs, indexes, caches, or eager source trees are generated.
+Each tool-specific argument file contains `--class-path`, `--source-path`, module options, and either `--release` or `--system` as applicable. Named source sets also include their `--module` and compiled output on the module path. Project directories do not imply the `main` source set. Compilation tasks finalize `writeJavaToolOptions`; no stubs, indexes, caches, or eager source trees are generated.
 
 ## Build and tests
 

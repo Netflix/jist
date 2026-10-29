@@ -172,16 +172,22 @@ allprojects { proj ->
 
                 def forwardedFlags = ['--module-path', '-p', '--module-source-path',
                                       '--add-modules', '--add-exports', '--add-reads',
-                                      '--limit-modules', '--system'] as Set
+                                      '--limit-modules', '--system', '--release'] as Set
                 def compilerArgs = compileTask.get().options.allCompilerArgs
+                def release = compileTask.get().options.release.orNull
+                boolean hasRelease = release != null
                 boolean hasExplicitSystem = false
+                if (hasRelease) {
+                    args.addAll(['--release', release.toString()])
+                }
                 for (int i = 0; i < compilerArgs.size(); i++) {
                     if (forwardedFlags.contains(compilerArgs[i]) && i + 1 < compilerArgs.size()) {
+                        if (compilerArgs[i] == '--release') hasRelease = true
                         if (compilerArgs[i] == '--system') hasExplicitSystem = true
                         args.addAll([compilerArgs[i], compilerArgs[++i]])
                     }
                 }
-                if (!hasExplicitSystem) {
+                if (!hasRelease && !hasExplicitSystem) {
                     args.addAll(['--system', compileTask.get().javaCompiler.get()
                             .metadata.installationPath.asFile.absolutePath])
                 }

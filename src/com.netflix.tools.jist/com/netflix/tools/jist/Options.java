@@ -29,6 +29,7 @@ public record Options(
         List<String> moduleSourcePaths,
         String target,
         String system,
+        String release,
         String module,
         String addModules,
         List<String> addExports,
@@ -113,6 +114,7 @@ public record Options(
                 moduleSourcePaths,
                 target,
                 system,
+                release,
                 module,
                 addModules,
                 addExports,
@@ -148,6 +150,7 @@ public record Options(
                 moduleSourcePaths,
                 selectedTarget,
                 system,
+                release,
                 module,
                 addModules,
                 addExports,
@@ -202,6 +205,8 @@ public record Options(
                 Module resolution:
                   --system <jdk>|none                     System module location
                                                             (default: running JDK)
+                  --release <release>                     Attribute source using Java SE API signatures
+                                                            (does not select matching JDK source)
                   -m, --module <M,...>                    Selected compilation modules
                   --add-modules <M,...>                   Root modules (default: java.se)
                                                             (also ALL-SYSTEM, ALL-MODULE-PATH)

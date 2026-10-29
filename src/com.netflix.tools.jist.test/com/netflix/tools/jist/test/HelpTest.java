@@ -77,7 +77,7 @@ class HelpTest {
         assertEquals(0, checker.isSupportedOption("--version"));
         for (var option : List.of("--module-path", "-p", "--upgrade-module-path", "--patch-module",
                 "--module-source-path", "--module", "-m", "--add-modules", "--add-reads", "--add-exports",
-                "--limit-modules", "--system")) {
+                "--limit-modules", "--system", "--release")) {
             assertEquals(1, checker.isSupportedOption(option), option);
         }
 
@@ -271,6 +271,8 @@ class HelpTest {
                 Module resolution:
                   --system <jdk>|none                     System module location
                                                             (default: running JDK)
+                  --release <release>                     Attribute source using Java SE API signatures
+                                                            (does not select matching JDK source)
                   -m, --module <M,...>                    Selected compilation modules
                   --add-modules <M,...>                   Root modules (default: java.se)
                                                             (also ALL-SYSTEM, ALL-MODULE-PATH)

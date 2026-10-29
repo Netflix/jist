@@ -590,6 +590,31 @@ class UsageQueryTest {
     }
 
     @Test
+    void attributesSourcesAgainstTheSelectedJavaRelease(@TempDir Path directory) throws Exception {
+        var source = directory.resolve("example/Example.java");
+        Files.createDirectories(source.getParent());
+        Files.writeString(source,
+                """
+                package example;
+
+                class Example {
+                    Example field;
+                    java.rmi.activation.Activatable legacy;
+
+                    void run() {
+                        System.out.println(field);
+                    }
+                }
+                """);
+
+        var result = run("--usages", "--release", "8", "--source-path", directory.toString(),
+                "example.Example.field");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals("example.Example(Example.java:8):         System.out.println(field);\n", result.output());
+    }
+
+    @Test
     void attributesUsagesInUncompiledModuleSources(@TempDir Path directory) throws Exception {
         var module = Files.createDirectories(directory.resolve("example.app"));
         var source = Files.createDirectories(module.resolve("example"));

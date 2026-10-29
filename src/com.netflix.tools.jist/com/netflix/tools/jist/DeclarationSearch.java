@@ -2079,7 +2079,7 @@ final class DeclarationSearch {
                 }
             }
         }
-        var systemSource = findSystemSource(outerInternalName, classLocation, opts.system());
+        var systemSource = findSystemSource(outerInternalName, classLocation, environment.systemSourceLocation());
         if (systemSource == null) {
             return new SymbolSource(classLocation, null, unitName, declaredSourceFile, null,
                     Map.of(), classes);

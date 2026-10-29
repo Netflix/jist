@@ -58,7 +58,12 @@ final class SearchEnvironment {
         result.add("-proc:none");
         result.add("-implicit:none");
         result.add("-XDshould-stop.at=ATTR");
-        if (enablePreview) {
+        if (opts.release() != null) {
+            result.addAll(List.of("--release", opts.release()));
+            if (enablePreview && opts.release().equals(Integer.toString(Runtime.version().feature()))) {
+                result.add("--enable-preview");
+            }
+        } else if (enablePreview) {
             result.addAll(List.of("--enable-preview", "--source",
                     Integer.toString(Runtime.version().feature())));
         }
@@ -102,7 +107,7 @@ final class SearchEnvironment {
             result.addAll(List.of("--patch-module", patch.getKey() + "="
                     + patch.getValue().stream().map(Path::toString).collect(Collectors.joining(File.pathSeparator))));
         }
-        if (opts.system() != null && (preserveNoSystem || !opts.system().equals("none"))) {
+        if (opts.release() == null && opts.system() != null && (preserveNoSystem || !opts.system().equals("none"))) {
             result.addAll(List.of("--system", opts.system()));
         }
         return List.copyOf(result);
@@ -822,7 +827,11 @@ final class SearchEnvironment {
     SourceLookup sources() throws IOException, ToolException {
         var patches = moduleSourceInputs().stream().filter(ModuleSourceInput::patch)
                 .map(ModuleSourceInput::location).collect(Collectors.toUnmodifiableSet());
-        return SourceLookup.open(sourceRoots(), patches, options.system());
+        return SourceLookup.open(sourceRoots(), patches, systemSourceLocation());
+    }
+
+    String systemSourceLocation() {
+        return options.release() == null ? options.system() : "none";
     }
 
     List<Path> sourceRoots() throws IOException, ToolException {

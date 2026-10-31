@@ -75,6 +75,11 @@ final class JistCommandLine {
             .choices("auto", "always", "never")
             .description("Control colored output")
             .build();
+    private final ToolOption format = ToolOption.builder("--format")
+            .argument("FORMAT")
+            .choices("text", "json")
+            .description("Select the output format")
+            .build();
     private final ToolOption heading = flag("--heading", "Group results under source headings");
     private final ToolOption noHeading = flag("--no-heading", "Keep one complete result per line");
     private final ToolOption listOnly = flag("-l", "Print matching symbols only");
@@ -116,6 +121,7 @@ final class JistCommandLine {
                     direct,
                     source,
                     color,
+                    format,
                     heading,
                     noHeading,
                     listOnly,
@@ -279,6 +285,7 @@ final class JistCommandLine {
                 parsed.contains(direct),
                 sourceScope,
                 colorMode,
+                Optional.ofNullable(last(parsed, format)).map(OutputFormat::parse).orElse(OutputFormat.TEXT),
                 selectedHeading,
                 parsed.contains(listOnly),
                 parsed.contains(qualifiedPath),

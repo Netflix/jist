@@ -23,6 +23,7 @@ import java.util.List;
 import javax.tools.ToolProvider;
 
 import com.netflix.tools.jist.Jist;
+import com.netflix.tools.json.Json;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -154,6 +155,21 @@ class CallQueryTest {
             assertEquals(4, result.output().lines().count(), result.output());
             assertEquals(4, result.output().lines().distinct().count(), result.output());
         }
+    }
+
+    @Test
+    void jsonOutputPreservesCallerToCalleeRelationships() {
+        var result = run(false, "--callers", "example.Target.make", "--format", "json");
+
+        assertSuccess(result);
+        var output = Json.parse(result.output());
+        assertEquals("jist", output.get("format").asString());
+        assertEquals(1, output.get("version").asInt());
+        var results = output.get("results").asList();
+        assertEquals(1, results.size(), result.output());
+        var text = results.getFirst().get("text").asString();
+        assertTrue(text.contains("example.Caller("), text);
+        assertTrue(text.contains("example.Caller.run(example.Target) -> example.Target.make()"), text);
     }
 
     @Test

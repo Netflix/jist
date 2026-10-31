@@ -47,6 +47,7 @@ public record Options(
         boolean direct,
         SourceScope source,
         ColorMode color,
+        OutputFormat format,
         Boolean heading,
         boolean listOnly,
         boolean qualifiedPath,
@@ -132,6 +133,7 @@ public record Options(
                 direct,
                 selectedSource,
                 color,
+                format,
                 heading,
                 listOnly,
                 qualifiedPath,
@@ -168,6 +170,7 @@ public record Options(
                 direct,
                 source,
                 color,
+                format,
                 heading,
                 listOnly,
                 qualifiedPath,
@@ -238,6 +241,7 @@ public record Options(
                   --heading                               Group results under source headings
                   --no-heading                            Keep one complete result per line
                   --color <when>                          Color: auto, always, or never
+                  --format <format>                       Output format: text or json
                   --pretty                                Use headings and color
                   -l                                      Print matching symbols only
                   --qualified-path                        Show the full source or ClassFile path

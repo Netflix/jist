@@ -14,6 +14,7 @@
 
 open module com.netflix.tools.jist.test {
     requires com.netflix.tools.jist;
+    requires com.netflix.tools.json; // @0.26.9
     requires java.compiler;
     requires org.junit.jupiter; // @6.1.3
 

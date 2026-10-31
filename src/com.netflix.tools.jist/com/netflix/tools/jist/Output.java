@@ -16,9 +16,98 @@ package com.netflix.tools.jist;
 
 import module java.base;
 
+import com.netflix.tools.json.JsonString;
+
 /** Output adapters for streaming search results. */
 final class Output {
     private Output() {}
+
+    static final class JsonPrintWriter extends PrintWriter {
+        private final JsonWriter json;
+
+        JsonPrintWriter(PrintWriter delegate) {
+            this(new JsonWriter(delegate));
+        }
+
+        private JsonPrintWriter(JsonWriter json) {
+            super(json, true);
+            this.json = json;
+        }
+
+        void finish() {
+            flush();
+            json.finish();
+        }
+    }
+
+    private static final class JsonWriter extends Writer {
+        private final Writer delegate;
+        private final StringBuilder line = new StringBuilder();
+        private boolean first = true;
+        private boolean finished;
+
+        JsonWriter(Writer delegate) {
+            this.delegate = delegate;
+            try {
+                delegate.write("{\"format\":\"jist\",\"version\":1,\"results\":[");
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+
+        @Override
+        public void write(char[] chars, int offset, int length) throws IOException {
+            if (finished) {
+                throw new IOException("JSON output is already finished");
+            }
+            int end = offset + length;
+            for (int i = offset; i < end; i++) {
+                if (chars[i] == '\n') {
+                    emitLine();
+                } else if (chars[i] != '\r') {
+                    line.append(chars[i]);
+                }
+            }
+        }
+
+        private void emitLine() throws IOException {
+            if (line.isEmpty()) {
+                return;
+            }
+            if (!first) {
+                delegate.write(',');
+            }
+            delegate.write("{\"text\":");
+            delegate.write(JsonString.of(line.toString()).toString());
+            delegate.write('}');
+            line.setLength(0);
+            first = false;
+        }
+
+        void finish() {
+            if (finished) {
+                return;
+            }
+            try {
+                emitLine();
+                delegate.write("]}\n");
+                delegate.flush();
+                finished = true;
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+
+        @Override
+        public void flush() throws IOException {
+            delegate.flush();
+        }
+
+        @Override
+        public void close() {
+            finish();
+        }
+    }
 
     private static final class CountingWriter extends Writer {
         private final Writer delegate;

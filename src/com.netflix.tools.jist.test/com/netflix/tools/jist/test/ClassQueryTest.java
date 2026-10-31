@@ -34,6 +34,7 @@ import javax.tools.JavaCompiler;
 import javax.tools.ToolProvider;
 
 import com.netflix.tools.jist.Jist;
+import com.netflix.tools.json.Json;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -1691,6 +1692,22 @@ class ClassQueryTest {
                 result.output());
         assertTrue(result.output().contains("example.jar!/com/example/Example.class): public int run"),
                 result.output());
+    }
+
+    @Test
+    void jsonOutputStreamsQualifiedResults() {
+        var result = run("--system", "none", "--class-path", JAR.toString(), "--source",
+                "none", "--format", "json", "com.example.Example.run");
+
+        assertEquals(0, result.exitCode(), result.error());
+        var output = Json.parse(result.output());
+        assertEquals("jist", output.get("format").asString());
+        assertEquals(1, output.get("version").asInt());
+        var results = output.get("results").asList();
+        assertEquals(1, results.size(), result.output());
+        var text = results.getFirst().get("text").asString();
+        assertTrue(text.contains("com.example.Example(jar:file:"), text);
+        assertTrue(text.contains("example.jar!/com/example/Example.class): public int run"), text);
     }
 
     @Test

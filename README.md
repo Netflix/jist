@@ -20,7 +20,7 @@ Capabilities include:
 - Show literal source signatures, documentation, definitions, enclosing types, or complete source files
 - Find semantic usages of an exact type or member, including overriding methods
 - Find caller and callee edges for an exact executable or every executable declared by a type
-- Produce terminal-friendly output or stable line-oriented output for other tools
+- Produce terminal-friendly, stable line-oriented, or streaming JSON output
 
 Searches use exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. There is no substring matching, ranking, typo correction, or implicit resolution of partially qualified names.
 
@@ -34,11 +34,10 @@ Searches use exact names rather than fuzzy matches. A simple name matches that c
 
 Follow the `ja` [Installation Guide](https://github.com/Netflix/ja#installation) to install the bundled tools, including `jist`.
 
-For standalone use, download the modular JAR from [Maven Central](https://central.sonatype.com/artifact/com.netflix/com.netflix.tools.jist). JDK 25 or later is required. Run it directly or as module `com.netflix.tools.jist`:
+For standalone use, resolve the modular JAR and its dependencies from [Maven Central](https://central.sonatype.com/artifact/com.netflix/com.netflix.tools.jist). JDK 25 or later is required. Run module `com.netflix.tools.jist` with the resolved modules on the module path:
 
 ```sh
-java -jar com.netflix.tools.jist-VERSION.jar java.lang.String
-java --module-path com.netflix.tools.jist-VERSION.jar --module com.netflix.tools.jist java.lang.String
+java --module-path <resolved-modules> --module com.netflix.tools.jist java.lang.String
 ```
 
 JMOD artifacts are also published for building custom runtime images.
@@ -73,6 +72,12 @@ Show source documentation and the complete declaration:
 
 ```sh
 jist --source definition java.lang.String.length
+```
+
+Stream qualified, machine-readable results:
+
+```sh
+jist --format json java.lang.String.length
 ```
 
 `--release` applies javac's Java SE API signatures when Jist attributes project or attached source. It does not change the ClassFiles Jist searches or select historical JDK implementation source; when matching source is unavailable, Jist falls back to ClassFile signatures.

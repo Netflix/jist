@@ -41,6 +41,10 @@ final class JavaAnalysis implements Closeable {
     private final SearchEnvironment environment;
     private final JavacTask task;
     private final List<CompilationUnitTree> units;
+    private final Map<String, ExecutableElement> methods = new HashMap<>();
+    private final Map<ExecutableElement, String> descriptors = new IdentityHashMap<>();
+    private final Map<ExecutableElement, String> signatures = new IdentityHashMap<>();
+    private final Map<ExecutableElement, String> keys = new IdentityHashMap<>();
 
     private JavaAnalysis(StandardJavaFileManager fileManager, DiagnosticCollector<JavaFileObject> diagnostics,
             SearchEnvironment environment, JavacTask task, List<CompilationUnitTree> units) {
@@ -124,8 +128,7 @@ final class JavaAnalysis implements Closeable {
     }
 
     TypeElement resolveType(String name) throws IOException, ToolException {
-        var selection = environment.resolveSymbolSelection(name);
-        if (selection.member() != null || !environment.classTargetExists(name)) {
+        if (!environment.classTargetExists(name)) {
             throw new ToolException(1, "Type not found: " + name);
         }
         var source = environment.resolveSourceFile(name);
@@ -148,6 +151,9 @@ final class JavaAnalysis implements Closeable {
     }
 
     ExecutableElement method(String owner, String name, String descriptor) throws IOException, ToolException {
+        var lookup = owner + "#" + name + descriptor;
+        var cached = methods.get(lookup);
+        if (cached != null) return cached;
         var type = elements().getTypeElement(owner);
         if (type == null) type = resolveType(owner);
         var members = name.equals("<init>") ? type.getEnclosedElements() : elements().getAllMembers(type);
@@ -155,6 +161,7 @@ final class JavaAnalysis implements Closeable {
             if (member instanceof ExecutableElement method
                     && method.getSimpleName().contentEquals(name)
                     && descriptor(method).equals(descriptor)) {
+                methods.put(lookup, method);
                 return method;
             }
         }
@@ -163,9 +170,9 @@ final class JavaAnalysis implements Closeable {
     }
 
     String descriptor(ExecutableElement method) {
-        return method.getParameters().stream()
+        return descriptors.computeIfAbsent(method, selected -> selected.getParameters().stream()
                 .map(parameter -> descriptor(parameter.asType()))
-                .collect(Collectors.joining("", "(", ")")) + descriptor(method.getReturnType());
+                .collect(Collectors.joining("", "(", ")")) + descriptor(selected.getReturnType()));
     }
 
     private String descriptor(TypeMirror type) {
@@ -187,16 +194,19 @@ final class JavaAnalysis implements Closeable {
     }
 
     String signature(ExecutableElement method) {
-        var owner = ((TypeElement) method.getEnclosingElement()).getQualifiedName().toString();
-        var name = method.getKind() == ElementKind.CONSTRUCTOR ? "new" : method.getSimpleName().toString();
-        return method.getParameters().stream()
-                .map(parameter -> types().erasure(parameter.asType()).toString())
-                .collect(Collectors.joining(",", owner + "." + name + "(", ")"));
+        return signatures.computeIfAbsent(method, selected -> {
+            var owner = ((TypeElement) selected.getEnclosingElement()).getQualifiedName().toString();
+            var name = selected.getKind() == ElementKind.CONSTRUCTOR ? "new" : selected.getSimpleName().toString();
+            return selected.getParameters().stream()
+                    .map(parameter -> types().erasure(parameter.asType()).toString())
+                    .collect(Collectors.joining(",", owner + "." + name + "(", ")"));
+        });
     }
 
     String key(ExecutableElement method) {
-        return ((TypeElement) method.getEnclosingElement()).getQualifiedName() + "#"
-                + method.getSimpleName() + descriptor(method);
+        return keys.computeIfAbsent(method, selected ->
+                ((TypeElement) selected.getEnclosingElement()).getQualifiedName() + "#"
+                        + selected.getSimpleName() + descriptor(selected));
     }
 
     void checkDiagnostics() throws ToolException {

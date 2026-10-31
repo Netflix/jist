@@ -110,7 +110,16 @@ public final class Jist implements ToolProvider, OptionChecker {
                     var kinds = opts.kinds().isEmpty() ? EnumSet.of(SymbolKind.TYPE, SymbolKind.METHOD) : EnumSet.copyOf(opts.kinds());
                     kinds.removeAll(EnumSet.of(SymbolKind.MODULE, SymbolKind.PACKAGE, SymbolKind.FIELD));
                     if (relationships != null && !kinds.isEmpty()) {
-                        new DeclarationSearch(environment, relationships).listSourceContexts(opts.withKinds(kinds), out);
+                        var selected = opts.withKinds(kinds);
+                        var declarations = new DeclarationSearch(environment, relationships);
+                        if (relationships.hasOnlyExactSupertypes()) {
+                            for (var name : relationships.exactSupertypes()) {
+                                declarations.printSymbolContext(selected.withTargetAndKinds(name, kinds),
+                                        new SymbolSelection(name, null), out, err);
+                            }
+                        } else {
+                            declarations.listSourceContexts(selected, out);
+                        }
                     }
                     if (calls != null && (opts.kinds().isEmpty() || opts.listsMethods())) {
                         calls.search(out);

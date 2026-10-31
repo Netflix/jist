@@ -105,18 +105,22 @@ final class CallSearch implements Closeable {
         try (var sources = environment.sources()) {
             CompiledInputs.scan(options, environment, InputStream::readAllBytes,
                     (bytes, location) -> compiled(bytes, location, sources, out));
+            var candidates = new LinkedHashMap<URI, SourceCandidate>();
             for (var root : sources.explicitPaths()) {
                 try (var files = Files.walk(root)) {
                     var iterator = files.filter(path -> path.toString().endsWith(".java"))
                             .filter(path -> !path.getFileName().toString().equals("module-info.java")).iterator();
                     while (iterator.hasNext()) {
                         var file = iterator.next();
-                        if (environment.includesSource(root, file)) {
-                            source(file, out);
+                        if (!environment.includesSource(root, file)) continue;
+                        var bytes = Files.readAllBytes(file);
+                        if (mayContainSelectedCall(new String(bytes, StandardCharsets.UTF_8))) {
+                            candidates.putIfAbsent(file.toUri(), new SourceCandidate(file, bytes));
                         }
                     }
                 }
             }
+            source(candidates, out);
         }
     }
 
@@ -132,20 +136,18 @@ final class CallSearch implements Closeable {
         return visibility.visibleModifiers(method.getModifiers(), false);
     }
 
-    private void edge(JavaAnalysis context, ExecutableElement caller, ExecutableElement callee,
+    private boolean edge(JavaAnalysis context, ExecutableElement caller, ExecutableElement callee,
             String unit, String file, String origin, int line, String site, boolean source, PrintWriter out) {
         boolean callerMatch = incoming.contains(context.key(callee)) && visible(context, caller, source);
         boolean calleeMatch = outgoing.contains(context.key(caller)) && visible(context, callee, source);
-        if (!callerMatch && !calleeMatch) {
-            return;
-        }
+        if (!callerMatch && !calleeMatch) return false;
         if (options.listOnly()) {
             if (callerMatch) symbol(context, caller, origin, out);
             if (calleeMatch) symbol(context, callee, origin, out);
-            return;
+            return true;
         }
         if (!emitted.add(origin + ":" + site + ":" + context.key(caller) + ":" + context.key(callee))) {
-            return;
+            return true;
         }
         if (out instanceof Output.OriginOutput output) {
             output.classOrigin(unit, origin);
@@ -153,6 +155,7 @@ final class CallSearch implements Closeable {
         }
         var prefix = file != null && line > 0 ? unit + "(" + file + ":" + line + "): " : unit + ": ";
         out.println(prefix + context.signature(caller) + " -> " + context.signature(callee));
+        return true;
     }
 
     private void symbol(JavaAnalysis context, ExecutableElement method, String origin, PrintWriter out) {
@@ -161,11 +164,33 @@ final class CallSearch implements Closeable {
         }
     }
 
-    private void source(Path file, PrintWriter out) throws IOException, ToolException {
-        try (var context = JavaAnalysis.open(options, environment, List.of(file))) {
+    private boolean mayContainSelectedCall(String source) {
+        for (var key : incoming) {
+            if (source.contains(sourceNeedle(key))) return true;
+        }
+        for (var key : outgoing) {
+            if (source.contains(sourceNeedle(key))) return true;
+        }
+        return false;
+    }
+
+    private static String sourceNeedle(String key) {
+        int memberStart = key.indexOf('#') + 1;
+        int memberEnd = key.indexOf('(', memberStart);
+        var member = key.substring(memberStart, memberEnd);
+        if (!member.equals("<init>")) return member;
+        int ownerEnd = memberStart - 1;
+        return key.substring(key.lastIndexOf('.', ownerEnd - 1) + 1, ownerEnd);
+    }
+
+    private void source(Map<URI, SourceCandidate> candidates, PrintWriter out) throws IOException, ToolException {
+        if (candidates.isEmpty()) return;
+        try (var context = JavaAnalysis.open(options, environment,
+                candidates.values().stream().map(SourceCandidate::file).toList())) {
             for (var unit : context.units()) {
-                if (!unit.getSourceFile().toUri().equals(file.toUri())) continue;
-                var text = Files.readString(file);
+                var candidate = candidates.get(unit.getSourceFile().toUri());
+                if (candidate == null) continue;
+                var file = candidate.file();
                 var positions = context.trees().getSourcePositions();
                 new TreePathScanner<Void, ExecutableElement>() {
 
@@ -195,11 +220,12 @@ final class CallSearch implements Closeable {
                         var owner = (TypeElement) caller.getEnclosingElement();
                         while (owner.getEnclosingElement() instanceof TypeElement parent) owner = parent;
                         var name = owner.getQualifiedName().toString();
-                        edge(context, caller, callee, name, file.getFileName().toString(), file.toUri().toString(), line,
-                                Long.toString(position), true, out);
-                        if (matches(context, caller, callee, true)) {
-                            enrich(name, file.getFileName().toString(), new SourceUnit(file.toUri().toString(),
-                                    text.getBytes(StandardCharsets.UTF_8), true, file, null), line, out);
+                        var fileName = file.getFileName().toString();
+                        var origin = file.toUri().toString();
+                        if (edge(context, caller, callee, name, fileName, origin, line,
+                                Long.toString(position), true, out)) {
+                            enrich(name, fileName, new SourceUnit(origin,
+                                    candidate.bytes(), true, file, null), line, out);
                         }
                     }
 
@@ -219,6 +245,8 @@ final class CallSearch implements Closeable {
             context.checkDiagnostics();
         }
     }
+
+    private record SourceCandidate(Path file, byte[] bytes) {}
 
     private void compiled(byte[] bytes, String location, SourceLookup sources, PrintWriter out) throws IOException, ToolException {
         var constants = new String(bytes, StandardCharsets.ISO_8859_1);
@@ -277,23 +305,19 @@ final class CallSearch implements Closeable {
                         int packageEnd = internal.lastIndexOf('/');
                         var unit = packageEnd < 0 ? "" : internal.substring(0, packageEnd + 1).replace('/', '.');
                         unit += sourceFile == null ? internal.substring(packageEnd + 1).split("\\$")[0] : sourceFile.replaceFirst("\\.java$", "");
-                        edge(analysis, caller, callee, unit, sourceFile, location, line(code, bci),
-                                method.methodName().stringValue() + method.methodType().stringValue() + ":" + bci, false, out);
-                        if (matches(analysis, caller, callee, false) && enrichedSource()) {
+                        int line = line(code, bci);
+                        if (edge(analysis, caller, callee, unit, sourceFile, location, line,
+                                method.methodName().stringValue() + method.methodType().stringValue() + ":" + bci, false, out)
+                                && enrichedSource()) {
                             int slash = internal.lastIndexOf('/');
                             var relative = (slash < 0 ? "" : internal.substring(0, slash + 1)) + sourceFile;
-                            enrich(unit, sourceFile, sources.find(relative, location, internal + ".class"), line(code, bci), out);
+                            enrich(unit, sourceFile, sources.find(relative, location, internal + ".class"), line, out);
                         }
                     }
                 }
                 bci += instruction.sizeInBytes();
             }
         }
-    }
-
-    private boolean matches(JavaAnalysis context, ExecutableElement caller, ExecutableElement callee, boolean source) {
-        return incoming.contains(context.key(callee)) && visible(context, caller, source)
-                || outgoing.contains(context.key(caller)) && visible(context, callee, source);
     }
 
     private boolean enrichedSource() {

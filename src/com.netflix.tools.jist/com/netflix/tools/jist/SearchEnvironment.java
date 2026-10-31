@@ -35,6 +35,8 @@ final class SearchEnvironment {
     private ModuleResolution resolvedModules;
     private Map<String, List<Path>> parsedPatches;
     private List<ModuleSourceInput> resolvedSourceInputs;
+    private final Map<String, Boolean> classTargets = new HashMap<>();
+    private final Map<String, Optional<Path>> sourceFiles = new HashMap<>();
 
     SearchEnvironment(Options options) {
         this.options = options;
@@ -223,14 +225,16 @@ final class SearchEnvironment {
     }
 
     boolean classTargetExists(String target) throws IOException, ToolException {
+        var cached = classTargets.get(target);
+        if (cached != null) return cached;
         var opts = options;
-        if (readsUnnamedModule(opts)
+        boolean exists = readsUnnamedModule(opts)
                         && resolveClass(target, parsePathList(opts.classPath())) != null
                 || resolveModuleClass(target) != null
                 || resolveSystemClass(target) != null
-                || resolveSourceFile(target) != null)
-            return true;
-        return false;
+                || resolveSourceFile(target) != null;
+        classTargets.put(target, exists);
+        return exists;
     }
 
     record ModuleInput(String name,
@@ -843,6 +847,14 @@ final class SearchEnvironment {
     }
 
     Path resolveSourceFile(String binaryName) throws IOException, ToolException {
+        var cached = sourceFiles.get(binaryName);
+        if (cached != null) return cached.orElse(null);
+        var resolved = findSourceFile(binaryName);
+        sourceFiles.put(binaryName, Optional.ofNullable(resolved));
+        return resolved;
+    }
+
+    private Path findSourceFile(String binaryName) throws IOException, ToolException {
         var compiler = ToolProvider.getSystemJavaCompiler();
         try (var fileManager = compiler.getStandardFileManager(null, Locale.ROOT, StandardCharsets.UTF_8)) {
             for (var entry : sourceRoots()) {

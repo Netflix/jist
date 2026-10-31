@@ -75,6 +75,14 @@ final class RelationshipSearch implements Closeable {
         }
     }
 
+    boolean hasOnlyExactSupertypes() {
+        return subtypes.isEmpty() && overrides.isEmpty() && !supertypes.isEmpty();
+    }
+
+    List<String> exactSupertypes() {
+        return supertypes.stream().sorted().toList();
+    }
+
     void readSourceUnit(String name) throws ToolException {
         analysis.readSourceUnit(name);
     }

@@ -246,6 +246,21 @@ class CallQueryTest {
     }
 
     @Test
+    void unrelatedSourceErrorsDoNotPreventCompiledCallSearch(@TempDir Path source) throws Exception {
+        var directory = Files.createDirectories(source.resolve("unrelated"));
+        Files.writeString(directory.resolve("Broken.java"),
+                "package unrelated; public class Broken { MissingType value; }");
+        var result = invoke(List.of(
+                "--limit-modules", "java.base",
+                "--class-path", CLASSES.toString(),
+                "--source-path", source.toString(),
+                "--callers", "example.Target.make"));
+        assertSuccess(result);
+        assertTrue(result.output().contains("example.Caller.run(example.Target) -> example.Target.make()"),
+                result.output());
+    }
+
+    @Test
     void missingDebugInformationDoesNotInventSourceCoordinates(@TempDir Path classes) throws Exception {
         var compiler = ToolProvider.getSystemJavaCompiler();
         try (var manager = compiler.getStandardFileManager(null, null, null);

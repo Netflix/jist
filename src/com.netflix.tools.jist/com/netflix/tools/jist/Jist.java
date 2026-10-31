@@ -22,6 +22,7 @@ import javax.tools.OptionChecker;
 import com.netflix.tools.jist.CommandLine.Completion;
 import com.netflix.tools.jist.CommandLine.CompletionRequest;
 import com.netflix.tools.jist.Output.InteractivePrintWriter;
+import com.netflix.tools.jist.Output.JsonPrintWriter;
 import com.netflix.tools.jist.Output.SourceWarningPrintWriter;
 import com.netflix.tools.jist.Output.SourceWarnings;
 
@@ -71,11 +72,16 @@ public final class Jist implements ToolProvider, OptionChecker {
         if (args.length == 1 && args[0].equals("--aot-warmup")) {
             return warmup(err);
         }
+        JsonPrintWriter jsonOutput = null;
         try {
             var opts = COMMAND_LINE.parse(workingDirectory, err, args);
             if (opts.help()) {
                 Options.printUsage(out);
                 return 0;
+            }
+            jsonOutput = opts.format() == OutputFormat.JSON ? new JsonPrintWriter(out) : null;
+            if (jsonOutput != null) {
+                out = jsonOutput;
             }
             if (opts.referencedTypes() != null) {
                 if (opts.target() != null || opts.usages() || opts.relationships() || opts.direct()) {
@@ -197,6 +203,11 @@ public final class Jist implements ToolProvider, OptionChecker {
         } catch (Exception e) {
             e.printStackTrace(err);
             return 2;
+        } finally {
+            if (jsonOutput != null) {
+                out.flush();
+                jsonOutput.finish();
+            }
         }
     }
 
@@ -229,6 +240,18 @@ public final class Jist implements ToolProvider, OptionChecker {
                     terminal && System.getenv("NO_COLOR") == null && !"dumb".equals(System.getenv("TERM"));
         };
         var warnings = new SourceWarnings(err);
+        if (opts.format() == OutputFormat.JSON) {
+            return new InteractivePrintWriter(
+                    out,
+                    false,
+                    false,
+                    opts.listOnly(),
+                    true,
+                    opts.lineNumber(),
+                    false,
+                    false,
+                    warnings);
+        }
         return compactFile
                         || heading
                         || color

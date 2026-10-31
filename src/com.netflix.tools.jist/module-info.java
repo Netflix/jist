@@ -18,6 +18,7 @@
  * @mainClass com.netflix.tools.jist.Jist
  */
 module com.netflix.tools.jist {
+    requires com.netflix.tools.json; // @0.26.9
     requires java.compiler;
     requires jdk.compiler;
 

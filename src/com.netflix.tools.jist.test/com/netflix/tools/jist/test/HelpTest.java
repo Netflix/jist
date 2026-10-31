@@ -73,6 +73,7 @@ class HelpTest {
         assertEquals(1, checker.isSupportedOption("--source"));
         assertEquals(1, checker.isSupportedOption("-classpath"));
         assertEquals(1, checker.isSupportedOption("--visibility"));
+        assertEquals(1, checker.isSupportedOption("--format"));
         assertEquals(1, checker.isSupportedOption("-C"));
         assertEquals(0, checker.isSupportedOption("--version"));
         for (var option : List.of("--module-path", "-p", "--upgrade-module-path", "--patch-module",
@@ -205,6 +206,7 @@ class HelpTest {
             "--add-reads",
             "--limit-modules",
             "--visibility",
+            "--format",
             "--subtypes",
             "--supertypes",
             "--overrides",
@@ -304,6 +306,7 @@ class HelpTest {
                   --heading                               Group results under source headings
                   --no-heading                            Keep one complete result per line
                   --color <when>                          Color: auto, always, or never
+                  --format <format>                       Output format: text or json
                   --pretty                                Use headings and color
                   -l                                      Print matching symbols only
                   --qualified-path                        Show the full source or ClassFile path

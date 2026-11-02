@@ -82,12 +82,14 @@ final class DeclarationSearch {
 
     private void listClasses(Options opts, PrintWriter out, Visibility visibility) throws IOException, ToolException {
         var emittedPackages = new HashSet<String>();
-        if (readsUnnamedModule(opts)) {
-            listClassPathEntries(opts, out, parsePathList(opts.classPath()), visibility, emittedPackages);
+        try (var sources = environment.sources()) {
+            if (readsUnnamedModule(opts)) {
+                listClassPathEntries(opts, out, parsePathList(opts.classPath()), visibility, emittedPackages, sources);
+            }
+            listModulePathEntries(opts, out, visibility, emittedPackages, sources);
+            listSystemSymbols(opts, out, visibility, emittedPackages, sources);
+            listSourceSymbols(opts, out, emittedPackages);
         }
-        listModulePathEntries(opts, out, visibility, emittedPackages);
-        listSystemSymbols(opts, out, visibility, emittedPackages);
-        listSourceSymbols(opts, out, emittedPackages);
         out.flush();
     }
 
@@ -380,7 +382,7 @@ final class DeclarationSearch {
             Map<String, EnumeratedSource> parsedSources)
             throws IOException, ToolException {
         var metadataKind = metadataKind(model, UsageSearch.displayClassName(model));
-        if (relationships != null && (metadataKind != null || sources.hasOrdinarySource(model))) {
+        if (sources.hasOrdinarySource(model) || relationships != null && metadataKind != null) {
             return;
         }
         if (metadataKind == SymbolKind.MODULE) {
@@ -688,7 +690,7 @@ final class DeclarationSearch {
                         }
                         selected = selected.withTargetAndKinds(names.getFirst() + "." + query.member(), selected.kinds());
                     }
-                    new SourceSymbolScanner(symbolOut, selected, List.of()).scan(unit, null);
+                    new SourceSymbolScanner(symbolOut, selected).scan(unit, null);
                 }
             }
             if (symbols.count() == 0) {
@@ -721,7 +723,7 @@ final class DeclarationSearch {
     }
 
     private void listSystemSymbols(Options opts, PrintWriter out, Visibility visibility,
-            Set<String> emittedPackages)
+            Set<String> emittedPackages, SourceLookup sources)
             throws IOException, ToolException {
         var system = opts.system();
         if ("none".equals(system)) {
@@ -778,7 +780,8 @@ final class DeclarationSearch {
                                                 : null,
                                         opts,
                                         visibility,
-                                        emittedPackages);
+                                        emittedPackages,
+                                        sources);
                             });
                     emitSynthesizedPackages(out, opts, exportedPackages, emittedPackages);
                 }
@@ -791,7 +794,7 @@ final class DeclarationSearch {
     }
 
     private void listClassPathEntries(Options opts, PrintWriter out, List<Path> entries,
-            Visibility visibility, Set<String> emittedPackages)
+            Visibility visibility, Set<String> emittedPackages, SourceLookup sources)
             throws IOException, ToolException {
         for (var entry : entries) {
             if (Files.isDirectory(entry)) {
@@ -811,7 +814,8 @@ final class DeclarationSearch {
                                             : null,
                                     opts,
                                     visibility,
-                                    emittedPackages);
+                                    emittedPackages,
+                                    sources);
                         });
             } else if (Files.isRegularFile(entry)) {
                 try (var jar = new JarFile(entry.toFile(), true, ZipFile.OPEN_READ, Runtime.version())) {
@@ -831,7 +835,7 @@ final class DeclarationSearch {
                             }
                         }
                         addListedSymbols(out, jarEntry.getName(), bytes, opts, visibility,
-                                emittedPackages);
+                                emittedPackages, sources);
                     }
                 }
             }
@@ -855,7 +859,7 @@ final class DeclarationSearch {
     }
 
     private void listModulePathEntries(Options opts, PrintWriter out, Visibility visibility,
-            Set<String> emittedPackages)
+            Set<String> emittedPackages, SourceLookup sources)
             throws IOException, ToolException {
         for (var module : environment.moduleInputs()) {
             var entry = module.location();
@@ -881,7 +885,8 @@ final class DeclarationSearch {
                                             : null,
                                     opts,
                                     visibility,
-                                    emittedPackages);
+                                    emittedPackages,
+                                    sources);
                         });
             } else if (Files.isRegularFile(entry)) {
                 try (var jar = new JarFile(entry.toFile(), true, ZipFile.OPEN_READ, Runtime.version())) {
@@ -900,7 +905,7 @@ final class DeclarationSearch {
                             }
                         }
                         addListedSymbols(out, jarEntry.getName(), bytes, opts, visibility,
-                                emittedPackages);
+                                emittedPackages, sources);
                     }
                 }
             }
@@ -909,13 +914,6 @@ final class DeclarationSearch {
     }
 
     private void listSourceSymbols(Options opts, PrintWriter out, Set<String> emittedPackages) throws IOException, ToolException {
-        var compiledEntries = new ArrayList<Path>();
-        if (readsUnnamedModule(opts)) {
-            compiledEntries.addAll(parsePathList(opts.classPath()));
-        }
-        environment.moduleInputs().stream()
-                .map(ModuleInput::location)
-                .forEach(compiledEntries::add);
         var compiler = ToolProvider.getSystemJavaCompiler();
         try (var fileManager = compiler.getStandardFileManager(null, Locale.ROOT, StandardCharsets.UTF_8)) {
             for (var sourceRoot : environment.sourceRoots()) {
@@ -931,7 +929,7 @@ final class DeclarationSearch {
                                     fileManager.getJavaFileObjects(sourceFile));
                             var units = task.parse().iterator();
                             if (units.hasNext()) {
-                                new SourceSymbolScanner(out, opts, compiledEntries, emittedPackages).scan(units.next(), null);
+                                new SourceSymbolScanner(out, opts, emittedPackages).scan(units.next(), null);
                             }
                         });
             }
@@ -939,7 +937,7 @@ final class DeclarationSearch {
     }
 
     private static void addListedSymbols(PrintWriter out, String resourceName, byte[] bytes,
-            Options opts, Visibility visibility, Set<String> emittedPackages) {
+            Options opts, Visibility visibility, Set<String> emittedPackages, SourceLookup sources) {
         var className = listedClassName(resourceName);
         if (className == null) {
             return;
@@ -947,6 +945,9 @@ final class DeclarationSearch {
         ClassModel model = null;
         if (bytes != null) {
             model = ClassFile.of().parse(bytes);
+            if (sources.hasOrdinarySource(model)) {
+                return;
+            }
         }
         addListedSymbols(out, className, model, opts, visibility, emittedPackages);
     }
@@ -1164,7 +1165,6 @@ final class DeclarationSearch {
     private static final class SourceSymbolScanner extends TreePathScanner<Void, Void> {
         private final PrintWriter out;
         private final Options opts;
-        private final List<Path> compiledEntries;
         private final Set<String> emittedPackages;
         private final Predicate<String> selectedDeclaration;
         private final Deque<String> classNames = new ArrayDeque<>();
@@ -1172,20 +1172,18 @@ final class DeclarationSearch {
         private String packageName = "";
         private String unitName = "";
 
-        SourceSymbolScanner(PrintWriter out, Options opts, List<Path> compiledEntries) {
-            this(out, opts, compiledEntries, new HashSet<>());
+        SourceSymbolScanner(PrintWriter out, Options opts) {
+            this(out, opts, new HashSet<>());
         }
 
-        SourceSymbolScanner(PrintWriter out, Options opts, List<Path> compiledEntries,
-                            Set<String> emittedPackages) {
-            this(out, opts, compiledEntries, emittedPackages, key -> true);
+        SourceSymbolScanner(PrintWriter out, Options opts, Set<String> emittedPackages) {
+            this(out, opts, emittedPackages, key -> true);
         }
 
-        SourceSymbolScanner(PrintWriter out, Options opts, List<Path> compiledEntries,
-                            Set<String> emittedPackages, Predicate<String> selectedDeclaration) {
+        SourceSymbolScanner(PrintWriter out, Options opts, Set<String> emittedPackages,
+                Predicate<String> selectedDeclaration) {
             this.out = out;
             this.opts = opts;
-            this.compiledEntries = compiledEntries;
             this.emittedPackages = emittedPackages;
             this.selectedDeclaration = selectedDeclaration;
         }
@@ -1242,8 +1240,7 @@ final class DeclarationSearch {
                     ? packageName.isEmpty() ? simpleName : packageName + "." + simpleName
                     : classNames.getLast() + "." + simpleName;
             var visibility = opts.visibility() != null ? opts.visibility() : Visibility.ALL;
-            var enclosingVisible = emittedClasses.isEmpty() || emittedClasses.getLast();
-            var sourceOnly = enclosingVisible && !hasCompiledClass(className, compiledEntries);
+            var sourceOnly = emittedClasses.isEmpty() || emittedClasses.getLast();
             boolean implicitlyPublic = parent.getLeaf() instanceof ClassTree enclosing
                     && (enclosing.getKind() == Kind.INTERFACE || enclosing.getKind() == Kind.ANNOTATION_TYPE);
             if (sourceOnly && opts.listsType(tree) && selectedDeclaration.test(className)
@@ -1422,20 +1419,6 @@ final class DeclarationSearch {
         }
     }
 
-    private static boolean hasCompiledClass(String binaryName, List<Path> compiledEntries) {
-        for (var entry : compiledEntries) {
-            if (!Files.isDirectory(entry)) {
-                continue;
-            }
-            for (var candidate : classFileCandidates(binaryName)) {
-                if (Files.isRegularFile(entry.resolve(candidate))) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
     private record SymbolSource(
             String classLocation,
             String sourceLocation,
@@ -1517,19 +1500,24 @@ final class DeclarationSearch {
         if (resolved == null) {
             resolved = environment.resolveSystemClass(binaryName);
         }
+        Path sourceFile = null;
+        if (resolved != null) {
+            try (var sources = environment.sources()) {
+                sourceFile = resolved.classes().stream()
+                        .map(sources::ordinarySource)
+                        .filter(Objects::nonNull)
+                        .findFirst()
+                        .orElse(null);
+            }
+        } else {
+            sourceFile = environment.resolveSourceFile(binaryName);
+        }
         var visibility = opts.visibility() != null
                 ? opts.visibility()
-                : resolved != null ? Visibility.LIBRARY : Visibility.ALL;
+                : sourceFile != null ? Visibility.ALL : Visibility.LIBRARY;
         final SymbolSource source;
         final List<ContextMatch> matches;
-        if (resolved != null) {
-            source = symbolSource(resolved.classes(), visibility, resolved.location(), opts);
-            matches = contextMatches(resolved.classes(), source.attribution(), opts, visibility);
-        } else {
-            var sourceFile = environment.resolveSourceFile(binaryName);
-            if (sourceFile == null) {
-                throw new ToolException(1, "Class not found: " + binaryName);
-            }
+        if (sourceFile != null) {
             var bytes = Files.readAllBytes(sourceFile);
             var model = SourceModel.parse(bytes);
             var structure = model.structure(sourceFile.getFileName()
@@ -1545,6 +1533,11 @@ final class DeclarationSearch {
                     attribution,
                     List.of());
             matches = contextMatches(structure, opts);
+        } else if (resolved != null) {
+            source = symbolSource(resolved.classes(), visibility, resolved.location(), opts);
+            matches = contextMatches(resolved.classes(), source.attribution(), opts, visibility);
+        } else {
+            throw new ToolException(1, "Class not found: " + binaryName);
         }
         printSymbolContext(source, matches, opts, out);
     }
@@ -1571,7 +1564,7 @@ final class DeclarationSearch {
                     fileManager.getJavaFileObjects(sourceFile));
             var units = task.parse().iterator();
             if (units.hasNext()) {
-                new SourceSymbolScanner(out, selected, List.of(), new HashSet<>(), selectedKeys::contains)
+                new SourceSymbolScanner(out, selected, new HashSet<>(), selectedKeys::contains)
                         .scan(units.next(), null);
             }
         }

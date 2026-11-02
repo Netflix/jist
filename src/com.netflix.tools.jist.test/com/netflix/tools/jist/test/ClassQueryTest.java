@@ -513,7 +513,7 @@ class ClassQueryTest {
     }
 
     @Test
-    void sourceContextIncludesVisibleOverloadsSeparatedByPrivateOverloads() {
+    void directorySourceContextIncludesAllOverloads() {
         var result = run(
                 "--system",
                 "none",
@@ -535,7 +535,7 @@ class ClassQueryTest {
                         result.output()),
                 () -> assertTrue(result.output().contains("public void run(int value)"),
                         result.output()),
-                () -> assertFalse(result.output().contains("private void run"),
+                () -> assertTrue(result.output().contains("private void run"),
                         result.output()));
     }
 
@@ -1560,6 +1560,62 @@ class ClassQueryTest {
         assertEquals(0, result.exitCode(), result.error());
         assertTrue(result.output().contains("return amount + 1;"),
                 result.output());
+    }
+
+    @Test
+    void directorySourceOverridesStaleClassFileDeclarations(@TempDir Path source) throws Exception {
+        var packageDirectory = Files.createDirectories(source.resolve("com/example"));
+        Files.writeString(packageDirectory.resolve("Example.java"), """
+                package com.example;
+                public class Example {
+                    public String fresh(String value) { return value; }
+                }
+                """);
+
+        for (var target : List.of("com.example.Example.fresh", "fresh")) {
+            var result = run("--system", "none", "--class-path", JAR.toString(),
+                    "--source-path", source.toString(), target);
+
+            assertEquals(0, result.exitCode(), result.error());
+            assertTrue(result.output().contains("public String fresh(String value)"), result.output());
+        }
+
+        var listed = run("--system", "none", "--class-path", JAR.toString(),
+                "--source-path", source.toString(), "--source", "none", "-l", "-k", "method", "fresh");
+        assertEquals(0, listed.exitCode(), listed.error());
+        assertEquals("method com.example.Example.fresh(String)\n", listed.output());
+
+        var enumerated = run("--system", "none", "--class-path", JAR.toString(),
+                "--source-path", source.toString(), "--source", "none", "-l", "-k", "method");
+        assertEquals(0, enumerated.exitCode(), enumerated.error());
+        assertEquals("method com.example.Example.fresh(String)\n", enumerated.output());
+    }
+
+    @Test
+    void sourceLookupStaysWithinTheConfiguredDirectory(@TempDir Path directory) throws Exception {
+        var sourceRoot = Files.createDirectories(directory.resolve("source"));
+        Files.writeString(directory.resolve("Outside.java"), """
+                package com.example;
+                public class Example {
+                    public int run(int amount) { return 999; }
+                }
+                """);
+        var classFile = ClassFile.of();
+        var escapedSource = classFile.transformClass(classFile.parse(Files.readAllBytes(CLASS)),
+                ClassTransform.dropping(SourceFileAttribute.class::isInstance).andThen(ClassTransform.endHandler(
+                        builder -> builder.with(SourceFileAttribute.of("../../../Outside.java")))));
+        var archive = directory.resolve("escaped-source.jar");
+        try (var jar = new JarOutputStream(Files.newOutputStream(archive))) {
+            jar.putNextEntry(new JarEntry("com/example/Example.class"));
+            jar.write(escapedSource);
+            jar.closeEntry();
+        }
+
+        var result = run("--system", "none", "--class-path", archive.toString(),
+                "--source-path", sourceRoot.toString(), "--source", "definition", "com.example.Example.run");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertTrue(result.output().contains("public int run(int amount) { /* body omitted */ }"), result.output());
     }
 
     @Test

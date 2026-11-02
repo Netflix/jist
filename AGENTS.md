@@ -22,9 +22,11 @@ Jist is a symbol search and semantic relationship tool for Java compilation cont
   completion, substring matching, fuzzy scoring, ranking, typo correction, or implicit resolution of
   partially qualified names.
 - Default output uses literal source signatures when source is available and compiled signatures as
-  its fallback. Both are anchored by the owning compilation unit.
+  its fallback. A Java file on a directory source path supersedes matching ClassFiles so uncompiled
+  project changes are visible. Archive source enriches the matching ClassFile instead. Both are
+  anchored by the owning compilation unit.
 - `-s`/`--source none|body|signature|doc|definition|symbol|type|unit` selects source detail. `none`
-  does not read source, `body` prints attached-source lines named by selected methods' ClassFile
+  prints symbols without source text, `body` prints attached-source lines named by selected methods' ClassFile
   line-number tables, `signature` is the default literal source header, `doc` spans from associated
   Javadoc through the end of the signature (including intervening source lines), `definition` is
   associated Javadoc plus syntax-tree extent, `symbol` selects a complete compilation unit for a
@@ -79,8 +81,9 @@ ClassFile -> ClassModel -> symbol records -> optional source context
 .java     -> JavacTask parse/analyze -> symbol records and source spans
 ```
 
-ClassFiles are authoritative for compiled signatures. Source provides exact definition, top-level
-type, and compilation-unit ranges. Source-only declarations participate
+A Java file on a directory source path is authoritative over matching ClassFiles. Otherwise,
+ClassFiles are authoritative for compiled signatures and attached archive source provides exact
+definition, top-level type, and compilation-unit ranges. Source-only declarations participate
 directly in search and exact usage lookup.
 
 JDK classes resolve from the selected system image. `<java.home>/lib/src.zip` is read on demand when available. `--release` applies javac's Java SE API signatures during source attribution; it does not change the searched ClassFiles or imply matching historical JDK implementation source. Archive source stays in memory. Runtime ClassFile locations use `jrt:/` URIs.

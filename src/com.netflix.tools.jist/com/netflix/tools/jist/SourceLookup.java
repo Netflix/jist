@@ -34,6 +34,7 @@ final class SourceLookup implements Closeable {
     private final List<Path> ordinarySourceDirectories;
     private final List<Path> descriptorPaths;
     private final Map<String, SourceUnit> cache = new HashMap<>();
+    private Map<String, Path> ordinarySources;
 
     private SourceLookup(SourcePaths explicit, SourcePaths system, List<Path> ordinarySourceDirectories, List<Path> descriptorPaths) {
         this.explicit = explicit;
@@ -71,6 +72,29 @@ final class SourceLookup implements Closeable {
         return ordinarySourceDirectories;
     }
 
+    void prepareOrdinarySources() throws IOException {
+        if (ordinarySources != null) {
+            return;
+        }
+        var discovered = new LinkedHashMap<String, Path>();
+        for (var root : ordinarySourceDirectories) {
+            var normalizedRoot = root.toAbsolutePath().normalize();
+            try (var files = Files.walk(normalizedRoot)) {
+                var iterator = files.filter(Files::isRegularFile)
+                        .filter(path -> path.toString().endsWith(JAVA_EXT))
+                        .iterator();
+                while (iterator.hasNext()) {
+                    var source = iterator.next().toAbsolutePath().normalize();
+                    var relativePath = normalizedRoot.relativize(source)
+                            .toString()
+                            .replace(File.separatorChar, '/');
+                    discovered.putIfAbsent(relativePath, source);
+                }
+            }
+        }
+        ordinarySources = Map.copyOf(discovered);
+    }
+
     boolean hasOrdinarySource(ClassModel model) {
         return ordinarySource(model) != null;
     }
@@ -92,6 +116,9 @@ final class SourceLookup implements Closeable {
                 + sourceFile.get()
                             .sourceFile()
                             .stringValue();
+        if (ordinarySources != null) {
+            return ordinarySources.get(relativePath);
+        }
         return ordinarySourceDirectories.stream()
                 .map(root -> contained(root, relativePath))
                 .filter(Objects::nonNull)

@@ -83,6 +83,7 @@ final class DeclarationSearch {
     private void listClasses(Options opts, PrintWriter out, Visibility visibility) throws IOException, ToolException {
         var emittedPackages = new HashSet<String>();
         try (var sources = environment.sources()) {
+            sources.prepareOrdinarySources();
             if (readsUnnamedModule(opts)) {
                 listClassPathEntries(opts, out, parsePathList(opts.classPath()), visibility, emittedPackages, sources);
             }
@@ -132,6 +133,7 @@ final class DeclarationSearch {
         var emittedPackages = new HashSet<String>();
         var parsedSources = new HashMap<String, EnumeratedSource>();
         try (var sources = environment.sources()) {
+            sources.prepareOrdinarySources();
             if (readsUnnamedModule(opts)) {
                 for (var entry : parsePathList(opts.classPath())) {
                     listSourceContextEntry(opts, out, entry, null, null, _ -> true, visibility,
@@ -1500,46 +1502,58 @@ final class DeclarationSearch {
         if (resolved == null) {
             resolved = environment.resolveSystemClass(binaryName);
         }
-        Path sourceFile = null;
         if (resolved != null) {
             try (var sources = environment.sources()) {
-                sourceFile = resolved.classes().stream()
+                var sourceFile = resolved.classes().stream()
                         .map(sources::ordinarySource)
                         .filter(Objects::nonNull)
                         .findFirst()
                         .orElse(null);
+                var visibility = opts.visibility() != null
+                        ? opts.visibility()
+                        : sourceFile != null ? Visibility.ALL : Visibility.LIBRARY;
+                if (sourceFile != null) {
+                    var bytes = Files.readAllBytes(sourceFile);
+                    var model = SourceModel.parse(bytes);
+                    var structure = model.structure(sourceFile.getFileName()
+                            .toString(),
+                            visibility);
+                    var source = new SymbolSource(
+                            null,
+                            unitLocation(sourceFile),
+                            structure.classNames().getFirst(),
+                            sourceFile.getFileName().toString(),
+                            model,
+                            structure.attribution(),
+                            List.of());
+                    printSymbolContext(source, contextMatches(structure, opts), opts, out);
+                } else {
+                    var source = symbolSource(resolved.classes(), visibility, resolved.location(), opts, sources);
+                    printSymbolContext(source,
+                            contextMatches(resolved.classes(), source.attribution(), opts, visibility), opts, out);
+                }
             }
-        } else {
-            sourceFile = environment.resolveSourceFile(binaryName);
+            return;
         }
-        var visibility = opts.visibility() != null
-                ? opts.visibility()
-                : sourceFile != null ? Visibility.ALL : Visibility.LIBRARY;
-        final SymbolSource source;
-        final List<ContextMatch> matches;
-        if (sourceFile != null) {
-            var bytes = Files.readAllBytes(sourceFile);
-            var model = SourceModel.parse(bytes);
-            var structure = model.structure(sourceFile.getFileName()
-                    .toString(),
-                    visibility);
-            var attribution = structure.attribution();
-            source = new SymbolSource(
-                    null,
-                    unitLocation(sourceFile),
-                    structure.classNames().getFirst(),
-                    sourceFile.getFileName().toString(),
-                    model,
-                    attribution,
-                    List.of());
-            matches = contextMatches(structure, opts);
-        } else if (resolved != null) {
-            source = symbolSource(resolved.classes(), visibility, resolved.location(), opts);
-            matches = contextMatches(resolved.classes(), source.attribution(), opts, visibility);
-        } else {
+        var sourceFile = environment.resolveSourceFile(binaryName);
+        if (sourceFile == null) {
             throw new ToolException(1, "Class not found: " + binaryName);
         }
-        printSymbolContext(source, matches, opts, out);
+        var visibility = opts.visibility() != null ? opts.visibility() : Visibility.ALL;
+        var bytes = Files.readAllBytes(sourceFile);
+        var model = SourceModel.parse(bytes);
+        var structure = model.structure(sourceFile.getFileName()
+                .toString(),
+                visibility);
+        var source = new SymbolSource(
+                null,
+                unitLocation(sourceFile),
+                structure.classNames().getFirst(),
+                sourceFile.getFileName().toString(),
+                model,
+                structure.attribution(),
+                List.of());
+        printSymbolContext(source, contextMatches(structure, opts), opts, out);
     }
 
     private static void printClassDeclarations(List<ClassModel> classes, Options opts, Visibility visibility,
@@ -2027,6 +2041,17 @@ final class DeclarationSearch {
     private SymbolSource symbolSource(List<ClassModel> classes, Visibility visibility, String classLocation,
             Options opts)
             throws IOException, ToolException {
+        if (opts.source() == SourceScope.NONE) {
+            return symbolSource(classes, visibility, classLocation, opts, null);
+        }
+        try (var sources = environment.sources()) {
+            return symbolSource(classes, visibility, classLocation, opts, sources);
+        }
+    }
+
+    private SymbolSource symbolSource(List<ClassModel> classes, Visibility visibility, String classLocation,
+            Options opts, SourceLookup sources)
+            throws IOException, ToolException {
         var outer = classes.stream()
                 .filter(model -> !model.thisClass()
                                        .asInternalName()
@@ -2044,32 +2069,30 @@ final class DeclarationSearch {
             return new SymbolSource(classLocation, null, unitName, declaredSourceFile, null,
                     Map.of(), classes);
         }
-        try (var sources = environment.sources()) {
-            var sourceFile = outer.findAttribute(Attributes.sourceFile());
-            if (sourceFile.isPresent()) {
-                int slash = outerInternalName.lastIndexOf('/');
-                var relativePath = (slash < 0 ? "" : outerInternalName.substring(0, slash + 1))
-                        + sourceFile.get()
-                                    .sourceFile()
-                                    .stringValue();
-                var source = sources.find(relativePath, classLocation, outerInternalName + CLASS_EXT);
-                if (source != null) {
-                    if (source.javaSource()) {
-                        var model = SourceModel.parse(source.bytes());
-                        return new SymbolSource(classLocation, source.origin(), unitName, declaredSourceFile, model,
-                                model.attributions(classes, visibility), classes);
-                    }
-                    return new SymbolSource(
-                            classLocation,
-                            source.origin(),
-                            unitName,
-                            declaredSourceFile,
-                            opts.source() == SourceScope.BODY || opts.source() == SourceScope.UNIT
-                                    ? SourceModel.parse(source.bytes())
-                                    : null,
-                            Map.of(),
-                            classes);
+        var sourceFile = outer.findAttribute(Attributes.sourceFile());
+        if (sourceFile.isPresent()) {
+            int slash = outerInternalName.lastIndexOf('/');
+            var relativePath = (slash < 0 ? "" : outerInternalName.substring(0, slash + 1))
+                    + sourceFile.get()
+                                .sourceFile()
+                                .stringValue();
+            var source = sources.find(relativePath, classLocation, outerInternalName + CLASS_EXT);
+            if (source != null) {
+                if (source.javaSource()) {
+                    var model = SourceModel.parse(source.bytes());
+                    return new SymbolSource(classLocation, source.origin(), unitName, declaredSourceFile, model,
+                            model.attributions(classes, visibility), classes);
                 }
+                return new SymbolSource(
+                        classLocation,
+                        source.origin(),
+                        unitName,
+                        declaredSourceFile,
+                        opts.source() == SourceScope.BODY || opts.source() == SourceScope.UNIT
+                                ? SourceModel.parse(source.bytes())
+                                : null,
+                        Map.of(),
+                        classes);
             }
         }
         var systemSource = findSystemSource(outerInternalName, classLocation, environment.systemSourceLocation());

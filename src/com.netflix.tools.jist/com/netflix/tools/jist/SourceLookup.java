@@ -72,12 +72,19 @@ final class SourceLookup implements Closeable {
     }
 
     boolean hasOrdinarySource(ClassModel model) {
+        return ordinarySource(model) != null;
+    }
+
+    Path ordinarySource(ClassModel model) {
+        if (model.isModuleInfo()) {
+            return null;
+        }
         var sourceFile = model.findAttribute(Attributes.sourceFile());
         if (sourceFile.isEmpty() || !sourceFile.get()
                 .sourceFile()
                 .stringValue()
                 .endsWith(JAVA_EXT)) {
-            return false;
+            return null;
         }
         var internalName = model.thisClass().asInternalName();
         int slash = internalName.lastIndexOf('/');
@@ -85,7 +92,12 @@ final class SourceLookup implements Closeable {
                 + sourceFile.get()
                             .sourceFile()
                             .stringValue();
-        return ordinarySourceDirectories.stream().anyMatch(root -> Files.isRegularFile(root.resolve(relativePath)));
+        return ordinarySourceDirectories.stream()
+                .map(root -> contained(root, relativePath))
+                .filter(Objects::nonNull)
+                .filter(Files::isRegularFile)
+                .findFirst()
+                .orElse(null);
     }
 
     SourceUnit find(String relativePath, String classLocation) throws IOException {
@@ -200,8 +212,8 @@ final class SourceLookup implements Closeable {
     }
 
     private SourceUnit read(Path root, String relativePath) throws IOException {
-        var candidate = root.resolve(relativePath);
-        if (!Files.isRegularFile(candidate)) {
+        var candidate = contained(root, relativePath);
+        if (candidate == null || !Files.isRegularFile(candidate)) {
             return null;
         }
         var origin = unitLocation(candidate);
@@ -212,6 +224,12 @@ final class SourceLookup implements Closeable {
             cache.put(origin, source);
         }
         return source;
+    }
+
+    private static Path contained(Path root, String relativePath) {
+        var normalizedRoot = root.toAbsolutePath().normalize();
+        var candidate = normalizedRoot.resolve(relativePath).normalize();
+        return candidate.startsWith(normalizedRoot) ? candidate : null;
     }
 
     private static SourcePaths openSystemSources(String system) {

@@ -47,6 +47,13 @@ enum SymbolKind {
         return optionName;
     }
 
+    boolean isType() {
+        return switch (this) {
+            case TYPE, CLASS, INTERFACE, ENUM, RECORD, ANNOTATION -> true;
+            default -> false;
+        };
+    }
+
     static SymbolKind parse(String value) throws ToolException {
         for (var kind : values()) {
             if (kind.optionName.equals(value)) {

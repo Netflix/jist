@@ -83,6 +83,14 @@ public record Options(
         return kinds.contains(SymbolKind.PACKAGE);
     }
 
+    boolean listsTypes() {
+        return kinds.isEmpty() || kinds.stream().anyMatch(SymbolKind::isType);
+    }
+
+    boolean listsOnlyTypes() {
+        return !kinds.isEmpty() && kinds.stream().allMatch(SymbolKind::isType);
+    }
+
     boolean listsType(ClassModel model) {
         if (kinds.isEmpty()) {
             return true;
@@ -97,8 +105,12 @@ public record Options(
         return kinds.stream().anyMatch(kind -> kind.matches(tree));
     }
 
-    boolean requiresClassModel() {
-        return listsMethods() || listsFields() || !kinds.isEmpty();
+    boolean requiresClassModel(String className) {
+        return listsTypes()
+                || listsMethods()
+                || listsFields()
+                || listsPackages() && (className.equals("package-info") || className.endsWith(".package-info"))
+                || listsModules() && className.equals("module-info");
     }
 
     Options withKinds(Set<SymbolKind> selectedKinds) {

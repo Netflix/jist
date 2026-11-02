@@ -638,6 +638,11 @@ final class DeclarationSearch {
         return separator < 0 ? "" : className.substring(0, separator);
     }
 
+    private static String resourcePackageName(String resourceName) {
+        int separator = resourceName.lastIndexOf('/');
+        return separator < 0 ? "" : resourceName.substring(0, separator).replace('/', '.');
+    }
+
     static Set<SymbolKind> defaultKinds() {
         return EnumSet.of(SymbolKind.MODULE, SymbolKind.PACKAGE, SymbolKind.TYPE, SymbolKind.METHOD, SymbolKind.FIELD);
     }
@@ -770,16 +775,18 @@ final class DeclarationSearch {
                     walkFilesInDeclarationOrder(module,
                             file -> {
                                 var resourceName = module.relativize(file).toString();
-                                if (!isExportedClassResource(resourceName, exportedPackages)
+                                var className = listedClassName(resourceName);
+                                if (className == null
+                                        || !includesClassEntry(opts, className)
+                                        || !isExportedClassResource(resourceName, exportedPackages)
                                         || !environment.includesSystemResource(module.getFileName().toString(), resourceName)) {
                                     return;
                                 }
-                                addListedSymbols(
+                                addListedClassSymbols(
                                         out,
                                         resourceName,
-                                        opts.requiresClassModel() || !visibility.includesAll()
-                                                ? Files.readAllBytes(file)
-                                                : null,
+                                        className,
+                                        opts.requiresClassModel(className) ? Files.readAllBytes(file) : null,
                                         opts,
                                         visibility,
                                         emittedPackages,
@@ -805,15 +812,17 @@ final class DeclarationSearch {
                             var resourceName = entry.relativize(file)
                                                     .toString()
                                                     .replace(File.separatorChar, '/');
-                            if ("module-info".equals(listedClassName(resourceName))) {
+                            var className = listedClassName(resourceName);
+                            if (className == null
+                                    || className.equals("module-info")
+                                    || !includesClassEntry(opts, className)) {
                                 return;
                             }
-                            addListedSymbols(
+                            addListedClassSymbols(
                                     out,
                                     resourceName,
-                                    opts.requiresClassModel() || !visibility.includesAll()
-                                            ? Files.readAllBytes(file)
-                                            : null,
+                                    className,
+                                    opts.requiresClassModel(className) ? Files.readAllBytes(file) : null,
                                     opts,
                                     visibility,
                                     emittedPackages,
@@ -827,16 +836,13 @@ final class DeclarationSearch {
                     while (iterator.hasNext()) {
                         var jarEntry = iterator.next();
                         var className = listedClassName(jarEntry.getName());
-                        if (className == null || className.equals("module-info")) {
+                        if (className == null
+                                || className.equals("module-info")
+                                || !includesClassEntry(opts, className)) {
                             continue;
                         }
-                        byte[] bytes = null;
-                        if (opts.requiresClassModel() || !visibility.includesAll()) {
-                            try (var input = jar.getInputStream(jarEntry)) {
-                                bytes = input.readAllBytes();
-                            }
-                        }
-                        addListedSymbols(out, jarEntry.getName(), bytes, opts, visibility,
+                        var bytes = opts.requiresClassModel(className) ? readJarEntry(jar, jarEntry) : null;
+                        addListedClassSymbols(out, jarEntry.getName(), className, bytes, opts, visibility,
                                 emittedPackages, sources);
                     }
                 }
@@ -876,15 +882,17 @@ final class DeclarationSearch {
                             var resourceName = entry.relativize(file)
                                                     .toString()
                                                     .replace(File.separatorChar, '/');
-                            if (!module.visibleResource(resourceName)) {
+                            var className = listedClassName(resourceName);
+                            if (className == null
+                                    || !includesClassEntry(opts, className)
+                                    || !module.visibleResource(resourceName)) {
                                 return;
                             }
-                            addListedSymbols(
+                            addListedClassSymbols(
                                     out,
                                     resourceName,
-                                    opts.requiresClassModel() || !visibility.includesAll()
-                                            ? Files.readAllBytes(file)
-                                            : null,
+                                    className,
+                                    opts.requiresClassModel(className) ? Files.readAllBytes(file) : null,
                                     opts,
                                     visibility,
                                     emittedPackages,
@@ -897,16 +905,14 @@ final class DeclarationSearch {
                                       .iterator();
                     while (iterator.hasNext()) {
                         var jarEntry = iterator.next();
-                        if (!module.visibleResource(jarEntry.getName())) {
+                        var className = listedClassName(jarEntry.getName());
+                        if (className == null
+                                || !includesClassEntry(opts, className)
+                                || !module.visibleResource(jarEntry.getName())) {
                             continue;
                         }
-                        byte[] bytes = null;
-                        if (opts.requiresClassModel() || !visibility.includesAll()) {
-                            try (var input = jar.getInputStream(jarEntry)) {
-                                bytes = input.readAllBytes();
-                            }
-                        }
-                        addListedSymbols(out, jarEntry.getName(), bytes, opts, visibility,
+                        var bytes = opts.requiresClassModel(className) ? readJarEntry(jar, jarEntry) : null;
+                        addListedClassSymbols(out, jarEntry.getName(), className, bytes, opts, visibility,
                                 emittedPackages, sources);
                     }
                 }
@@ -938,12 +944,39 @@ final class DeclarationSearch {
         }
     }
 
-    private static void addListedSymbols(PrintWriter out, String resourceName, byte[] bytes,
-            Options opts, Visibility visibility, Set<String> emittedPackages, SourceLookup sources) {
-        var className = listedClassName(resourceName);
-        if (className == null) {
-            return;
+    private static boolean includesClassEntry(Options opts, String className) {
+        var metadataKind = metadataKind(null, className);
+        if (metadataKind == SymbolKind.MODULE) {
+            return opts.listsModules();
         }
+        if (metadataKind == SymbolKind.PACKAGE) {
+            return opts.listsPackages();
+        }
+        if (!opts.listsTypes() && !opts.listsMethods() && !opts.listsFields() && !opts.listsPackages()) {
+            return false;
+        }
+        return !opts.listsOnlyTypes() || matchesListedPrefix(opts, className);
+    }
+
+    private static byte[] readJarEntry(JarFile jar, JarEntry entry) throws IOException {
+        long size = entry.getSize();
+        if (size < 0 || size > Integer.MAX_VALUE) {
+            try (var input = jar.getInputStream(entry)) {
+                return input.readAllBytes();
+            }
+        }
+        var bytes = new byte[(int) size];
+        try (var input = jar.getInputStream(entry)) {
+            int read = input.readNBytes(bytes, 0, bytes.length);
+            if (read != bytes.length) {
+                throw new EOFException("Expected " + bytes.length + " bytes for " + entry.getName() + ", read " + read);
+            }
+        }
+        return bytes;
+    }
+
+    private static void addListedClassSymbols(PrintWriter out, String resourceName, String className, byte[] bytes,
+            Options opts, Visibility visibility, Set<String> emittedPackages, SourceLookup sources) {
         ClassModel model = null;
         if (bytes != null) {
             model = ClassFile.of().parse(bytes);
@@ -951,7 +984,8 @@ final class DeclarationSearch {
                 return;
             }
         }
-        addListedSymbols(out, className, model, opts, visibility, emittedPackages);
+        addListedSymbols(out, className, model, opts, visibility, emittedPackages,
+                resourcePackageName(resourceName));
     }
 
     private static void addListedSymbols(PrintWriter out, String className, ClassModel model,
@@ -962,12 +996,17 @@ final class DeclarationSearch {
 
     private static void addListedSymbols(PrintWriter out, String className, ClassModel model,
             Options opts, Visibility visibility, Set<String> emittedPackages) {
+        addListedSymbols(out, className, model, opts, visibility, emittedPackages, packageName(className));
+    }
+
+    private static void addListedSymbols(PrintWriter out, String className, ClassModel model,
+            Options opts, Visibility visibility, Set<String> emittedPackages, String resourcePackageName) {
         var metadataKind = metadataKind(model, className);
         var packageName = model != null && !model.isModuleInfo()
                 ? model.thisClass()
                        .asSymbol()
                        .packageName()
-                : packageName(className);
+                : resourcePackageName;
         if (!packageName.isEmpty()
                 && opts.listsPackages()
                 && emittedPackages.add(packageName)
@@ -993,6 +1032,9 @@ final class DeclarationSearch {
                             renderModuleDeclaration(model));
                 }
             }
+            return;
+        }
+        if (!opts.listsTypes() && !opts.listsMethods() && !opts.listsFields()) {
             return;
         }
         boolean visibleType;

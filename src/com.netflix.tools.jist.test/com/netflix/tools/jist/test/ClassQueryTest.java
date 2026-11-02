@@ -570,6 +570,23 @@ class ClassQueryTest {
     }
 
     @Test
+    void omittedTargetEnumeratesClassPathPackages() {
+        var result = run(
+                "--system",
+                "none",
+                "--class-path",
+                ROOT.resolve("classes").toString(),
+                "--source",
+                "none",
+                "--kind",
+                "package");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertTrue(result.output().contains("com.example: package com.example;"), result.output());
+        assertFalse(result.output().contains("class Example"), result.output());
+    }
+
+    @Test
     void kindsCanBeCombined() {
         var result = run(
                 "--system",

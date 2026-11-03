@@ -76,23 +76,31 @@ final class CallSearch implements Closeable {
 
     private void select(List<String> targets, Set<String> selected) throws IOException, ToolException {
         for (var target : targets) {
-            var selection = environment.resolveSymbolSelection(target);
-            var type = analysis.resolveType(selection.path());
-            var member = selection.member();
             boolean found = false;
-            var members = member == null || member.equals("new")
-                    ? type.getEnclosedElements()
-                    : analysis.elements().getAllMembers(type);
-            for (var element : members) {
-                if (element instanceof ExecutableElement method && matches(member, method)) {
-                    selected.add(analysis.key(method));
-                    found = true;
-                }
+            for (var selection : ExecutableTargets.resolve(options, environment, target)) {
+                found |= select(selection, selected);
             }
-            if (member != null && !found) {
-                throw new ToolException(1, "Method not found: " + target);
+            if (!found) {
+                throw new ToolException(1, "Executable not found: " + target);
             }
         }
+    }
+
+    private boolean select(SymbolSelection selection, Set<String> selected)
+            throws IOException, ToolException {
+        var type = analysis.resolveType(selection.path());
+        var member = selection.member();
+        boolean found = false;
+        var members = member == null || member.equals("new")
+                ? type.getEnclosedElements()
+                : analysis.elements().getAllMembers(type);
+        for (var element : members) {
+            if (element instanceof ExecutableElement method && matches(member, method)) {
+                selected.add(analysis.key(method));
+                found = true;
+            }
+        }
+        return found;
     }
 
     private static boolean matches(String member, ExecutableElement method) {

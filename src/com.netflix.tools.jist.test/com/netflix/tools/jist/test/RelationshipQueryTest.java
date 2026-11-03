@@ -134,6 +134,14 @@ class RelationshipQueryTest {
     }
 
     @Test
+    void ownerAndMemberSuffixesSelectOverrideTargets() {
+        var result = run("--overrides", "Root.run");
+        assertSuccess(result);
+        assertTrue(result.output().contains("method example.Base.run(java.lang.String)"), result.output());
+        assertTrue(result.output().contains("method example.Leaf.run(java.lang.String)"), result.output());
+    }
+
+    @Test
     void directOverridesAllowInheritedMethodsButNotInterveningOverrides() {
         var result = run("--overrides", "example.Base.run", "--direct");
         assertSuccess(result);

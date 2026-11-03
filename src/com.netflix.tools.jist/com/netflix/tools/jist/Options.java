@@ -120,6 +120,45 @@ public record Options(
         return withTargetAndKinds(target, selectedKinds);
     }
 
+    Options executableTargetSearch(String selectedTarget) {
+        return new Options(
+                classPath,
+                sourcePath,
+                modulePath,
+                upgradeModulePath,
+                patchModules,
+                moduleSourcePaths,
+                selectedTarget,
+                system,
+                false,
+                false,
+                release,
+                module,
+                addModules,
+                addExports,
+                addReads,
+                limitModules,
+                Visibility.ALL,
+                Set.of(SymbolKind.TYPE, SymbolKind.METHOD),
+                usages,
+                subtypes,
+                supertypes,
+                overrides,
+                callers,
+                callees,
+                referencedTypes,
+                direct,
+                source,
+                color,
+                format,
+                heading,
+                listOnly,
+                showOrigin,
+                lineNumber,
+                breakMatches,
+                help);
+    }
+
     Options withSource(SourceScope selectedSource) {
         return new Options(
                 classPath,

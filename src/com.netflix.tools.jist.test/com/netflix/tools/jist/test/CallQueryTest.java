@@ -125,6 +125,46 @@ class CallQueryTest {
     }
 
     @Test
+    void simpleMethodNamesSelectEveryExactMatch() {
+        for (boolean source : List.of(false, true)) {
+            var result = run(source, "--callers", "touch", "--visibility", "all");
+            assertSuccess(result);
+            assertTrue(result.output().contains("example.Caller.run(example.Target) -> example.Target.touch()"), result.output());
+            assertTrue(result.output().contains("example.Caller.unrelated(example.Other) -> example.Other.touch()"), result.output());
+        }
+    }
+
+    @Test
+    void simpleTypeNamesSelectDeclaredExecutables() {
+        for (boolean source : List.of(false, true)) {
+            var result = run(source, "--callers", "Target", "--visibility", "all");
+            assertSuccess(result);
+            assertTrue(result.output().contains("example.Caller.run(example.Target) -> example.Target.touch()"), result.output());
+            assertTrue(result.output().contains("example.Caller.run(example.Target) -> example.Target.make()"), result.output());
+        }
+    }
+
+    @Test
+    void ownerAndMemberSuffixesNarrowMethodSelections() {
+        for (boolean source : List.of(false, true)) {
+            var result = run(source, "--callers", "Target.touch", "--visibility", "all");
+            assertSuccess(result);
+            assertTrue(result.output().contains("example.Caller.run(example.Target) -> example.Target.touch()"), result.output());
+            assertFalse(result.output().contains("example.Caller.unrelated(example.Other)"), result.output());
+        }
+    }
+
+    @Test
+    void ownerSuffixesResolveInheritedMethods() {
+        for (boolean source : List.of(false, true)) {
+            var result = run(source, "--callers", "Inherited.unused", "--visibility", "all");
+            assertSuccess(result);
+            assertTrue(result.output().contains(
+                    "example.Caller.inherited(example.Inherited) -> example.Target.unused()"), result.output());
+        }
+    }
+
+    @Test
     void calleesIncludeMethodsAndConstructorsButNotParameterTypesOrReferences() {
         for (boolean source : List.of(false, true)) {
             var result = run(source, "--callees", "example.Caller.run");

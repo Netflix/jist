@@ -35,6 +35,7 @@ final class SourceLookup implements Closeable {
     private final List<Path> descriptorPaths;
     private final Map<String, SourceUnit> cache = new HashMap<>();
     private Map<String, Path> ordinarySources;
+    private Set<String> ordinarySourcePackages;
 
     private SourceLookup(SourcePaths explicit, SourcePaths system, List<Path> ordinarySourceDirectories, List<Path> descriptorPaths) {
         this.explicit = explicit;
@@ -93,6 +94,21 @@ final class SourceLookup implements Closeable {
             }
         }
         ordinarySources = Map.copyOf(discovered);
+        ordinarySourcePackages = ordinarySources.keySet()
+                .stream()
+                .map(path -> {
+                    int slash = path.lastIndexOf('/');
+                    return slash < 0 ? "" : path.substring(0, slash);
+                })
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    boolean mayHaveOrdinarySource(String resourceName) {
+        if (ordinarySourcePackages == null) {
+            return true;
+        }
+        int slash = resourceName.lastIndexOf('/');
+        return ordinarySourcePackages.contains(slash < 0 ? "" : resourceName.substring(0, slash));
     }
 
     boolean hasOrdinarySource(ClassModel model) {

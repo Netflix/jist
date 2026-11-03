@@ -95,15 +95,15 @@ JDK classes resolve from the selected system image. `<java.home>/lib/src.zip` is
   `UNIT(SourceFile.java:LINE): SOURCE_LINE`.
 - Redirected output keeps one complete result per line when a query can span compilation units. A
   default explicit source-file locator omits its redundant unit/file context and emits
-  `LINE: SOURCE`; explicit `--heading`, `--no-heading`, or `--qualified-path` retains context.
+  `LINE: SOURCE`; explicit `--heading`, `--no-heading`, or `--show-origin` retains context.
   Terminal output groups consecutive results under `UNIT` or `UNIT(SourceFile.java)` headings and
   colors headings and line numbers. Highlight
   only javac-attributed source token ranges in usage results; never infer highlights by matching text.
   ClassFile-only usages without attributed ranges and declaration output are not highlighted.
-  `--format json` emits a streaming versioned envelope whose results contain qualified, complete
-  output rows without headings, color, or blank breaks.
-  `--qualified-path` replaces the short source filename with its project path or archive URI and
-  qualifies compiled fallback rows with their ClassFile origin. `--no-line-number` removes source
+  `--format json` emits a streaming versioned envelope whose results contain complete output rows
+  and structured origins without headings, color, or blank breaks.
+  `--show-origin` replaces the short source filename with its project path or archive URI, qualifies
+  compiled fallback rows with their ClassFile origin, and renders system origins in module-qualified form. `--no-line-number` removes source
   coordinates and `--break` inserts one blank line between
   non-consecutive source matches. Output formatting must remain streaming and must not collect
   results by file.

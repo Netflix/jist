@@ -1188,9 +1188,9 @@ class ClassQueryTest {
     }
 
     @Test
-    void simpleNameQualifiedPathIdentifiesClassFileFallback() {
+    void simpleNameShowOriginIdentifiesClassFileFallback() {
         var result = run("--system", "none", "--class-path", JAR.toString(), "--source",
-                "none", "--qualified-path", "Example");
+                "none", "--show-origin", "Example");
 
         assertEquals(0, result.exitCode(), result.error());
         assertTrue(result.output().contains("com.example.Example(jar:file:"),
@@ -1202,7 +1202,7 @@ class ClassQueryTest {
     @Test
     void listPrintsAQualifiedClassFileHeader() {
         var result = run("--system", "none", "--class-path", JAR.toString(), "--source",
-                "none", "-l", "--qualified-path", "Example");
+                "none", "-l", "--show-origin", "Example");
 
         assertEquals(0, result.exitCode(), result.error());
         assertTrue(result.output().startsWith("class com.example.Example(jar:file:"),
@@ -1656,7 +1656,7 @@ class ClassQueryTest {
                 JAR.toString(),
                 "--source-path",
                 NESTED_SOURCE_JAR.toString(),
-                "--qualified-path",
+                "--show-origin",
                 "--source",
                 "definition",
                 "com.example.Example.run");
@@ -1677,7 +1677,7 @@ class ClassQueryTest {
                 MULTI_RELEASE_JAR.toString(),
                 "--source-path",
                 MULTI_RELEASE_SOURCE_JAR.toString(),
-                "--qualified-path",
+                "--show-origin",
                 "--source",
                 "definition",
                 "com.example.Versioned.marker");
@@ -1712,7 +1712,7 @@ class ClassQueryTest {
                 NON_JAVA_JAR.toString(),
                 "--source-path",
                 NON_JAVA_SOURCE_JAR.toString(),
-                "--qualified-path",
+                "--show-origin",
                 "--source",
                 "body",
                 "com.example.Example.run");
@@ -1735,7 +1735,7 @@ class ClassQueryTest {
                 NON_JAVA_JAR.toString(),
                 "--source-path",
                 NON_JAVA_SOURCE_JAR.toString(),
-                "--qualified-path",
+                "--show-origin",
                 "--source",
                 "unit",
                 "com.example.Example");
@@ -1756,9 +1756,9 @@ class ClassQueryTest {
     }
 
     @Test
-    void qualifiedPathIdentifiesClassFileFallback() {
+    void showOriginIdentifiesClassFileFallback() {
         var result = run("--system", "none", "--class-path", JAR.toString(), "--source",
-                "none", "--qualified-path", "com.example.Example.run");
+                "none", "--show-origin", "com.example.Example.run");
 
         assertEquals(0, result.exitCode(), result.error());
         assertTrue(result.output().contains("com.example.Example(jar:file:"),
@@ -1768,7 +1768,7 @@ class ClassQueryTest {
     }
 
     @Test
-    void jsonOutputStreamsQualifiedResults() {
+    void jsonOutputStreamsStructuredOrigins() {
         var result = run("--system", "none", "--class-path", JAR.toString(), "--source",
                 "none", "--format", "json", "com.example.Example.run");
 
@@ -1778,9 +1778,13 @@ class ClassQueryTest {
         assertEquals(1, output.get("version").asInt());
         var results = output.get("results").asList();
         assertEquals(1, results.size(), result.output());
-        var text = results.getFirst().get("text").asString();
-        assertTrue(text.contains("com.example.Example(jar:file:"), text);
-        assertTrue(text.contains("example.jar!/com/example/Example.class): public int run"), text);
+        var row = results.getFirst();
+        var text = row.get("text").asString();
+        assertTrue(text.contains("com.example.Example: public int run"), text);
+        assertFalse(text.contains("jar:file:"), text);
+        var origin = row.get("origin");
+        assertEquals("archive", origin.get("kind").asString());
+        assertTrue(origin.get("location").asString().contains("example.jar!/com/example/Example.class"));
     }
 
     @Test

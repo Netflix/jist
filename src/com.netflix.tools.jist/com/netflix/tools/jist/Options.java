@@ -29,6 +29,7 @@ public record Options(
         List<String> moduleSourcePaths,
         String target,
         String system,
+        boolean excludeSystemModules,
         String release,
         String module,
         String addModules,
@@ -50,7 +51,7 @@ public record Options(
         OutputFormat format,
         Boolean heading,
         boolean listOnly,
-        boolean qualifiedPath,
+        boolean showOrigin,
         boolean lineNumber,
         boolean breakMatches,
         boolean help) {
@@ -92,10 +93,11 @@ public record Options(
     }
 
     boolean listsType(ClassModel model) {
-        if (kinds.isEmpty()) {
-            return true;
-        }
-        return kinds.stream().anyMatch(kind -> kind.matches(model));
+        return listsType(SymbolKind.classKind(model));
+    }
+
+    boolean listsType(SymbolKind kind) {
+        return kind != null && (kinds.isEmpty() || kinds.contains(SymbolKind.TYPE) || kinds.contains(kind));
     }
 
     boolean listsType(ClassTree tree) {
@@ -127,6 +129,7 @@ public record Options(
                 moduleSourcePaths,
                 target,
                 system,
+                excludeSystemModules,
                 release,
                 module,
                 addModules,
@@ -148,7 +151,7 @@ public record Options(
                 format,
                 heading,
                 listOnly,
-                qualifiedPath,
+                showOrigin,
                 lineNumber,
                 breakMatches,
                 help);
@@ -164,6 +167,7 @@ public record Options(
                 moduleSourcePaths,
                 selectedTarget,
                 system,
+                excludeSystemModules,
                 release,
                 module,
                 addModules,
@@ -185,7 +189,7 @@ public record Options(
                 format,
                 heading,
                 listOnly,
-                qualifiedPath,
+                showOrigin,
                 lineNumber,
                 breakMatches,
                 help);
@@ -220,6 +224,7 @@ public record Options(
                 Module resolution:
                   --system <jdk>|none                     System module location
                                                             (default: running JDK)
+                  --exclude-system-modules                 Exclude system modules from searches
                   --release <release>                     Attribute source using Java SE API signatures
                                                             (does not select matching JDK source)
                   -m, --module <M,...>                    Selected compilation modules
@@ -256,7 +261,7 @@ public record Options(
                   --format <format>                       Output format: text or json
                   --pretty                                Use headings and color
                   -l                                      Print matching symbols only
-                  --qualified-path                        Show the full source or ClassFile path
+                  --show-origin                           Show the origin of each result
                   -N, --no-line-number                    Suppress source line numbers
                   --break                                 Separate non-consecutive source matches
 

@@ -22,7 +22,21 @@ import com.netflix.tools.json.JsonString;
 final class Output {
     private Output() {}
 
-    static final class JsonPrintWriter extends PrintWriter {
+    private record ResultOrigin(
+            String kind,
+            String location,
+            String system,
+            String module,
+            String version,
+            String resource,
+            String source,
+            Integer line) {}
+
+    private interface ResultOutput {
+        void resultOrigin(ResultOrigin origin);
+    }
+
+    static final class JsonPrintWriter extends PrintWriter implements ResultOutput {
         private final JsonWriter json;
 
         JsonPrintWriter(PrintWriter delegate) {
@@ -32,6 +46,11 @@ final class Output {
         private JsonPrintWriter(JsonWriter json) {
             super(json, true);
             this.json = json;
+        }
+
+        @Override
+        public void resultOrigin(ResultOrigin origin) {
+            json.resultOrigin(origin);
         }
 
         void finish() {
@@ -45,6 +64,7 @@ final class Output {
         private final StringBuilder line = new StringBuilder();
         private boolean first = true;
         private boolean finished;
+        private ResultOrigin origin;
 
         JsonWriter(Writer delegate) {
             this.delegate = delegate;
@@ -72,6 +92,7 @@ final class Output {
 
         private void emitLine() throws IOException {
             if (line.isEmpty()) {
+                origin = null;
                 return;
             }
             if (!first) {
@@ -79,9 +100,45 @@ final class Output {
             }
             delegate.write("{\"text\":");
             delegate.write(JsonString.of(line.toString()).toString());
+            if (origin != null) {
+                writeOrigin(origin);
+            }
             delegate.write('}');
             line.setLength(0);
+            origin = null;
             first = false;
+        }
+
+        private void writeOrigin(ResultOrigin value) throws IOException {
+            delegate.write(",\"origin\":{");
+            writeField("kind", value.kind(), false);
+            writeField("location", value.location(), true);
+            writeField("system", value.system(), true);
+            writeField("module", value.module(), true);
+            writeField("version", value.version(), true);
+            writeField("resource", value.resource(), true);
+            writeField("source", value.source(), true);
+            if (value.line() != null) {
+                delegate.write(",\"line\":");
+                delegate.write(Integer.toString(value.line()));
+            }
+            delegate.write('}');
+        }
+
+        private void writeField(String name, String value, boolean comma) throws IOException {
+            if (value == null) {
+                return;
+            }
+            if (comma) {
+                delegate.write(',');
+            }
+            delegate.write(JsonString.of(name).toString());
+            delegate.write(':');
+            delegate.write(JsonString.of(value).toString());
+        }
+
+        void resultOrigin(ResultOrigin value) {
+            origin = value;
         }
 
         void finish() {
@@ -249,14 +306,16 @@ final class Output {
                 boolean heading,
                 boolean color,
                 boolean listOnly,
-                boolean qualifiedPath,
+                boolean showOrigin,
                 boolean lineNumber,
                 boolean breakMatches,
                 boolean compactFile,
+                String system,
+                Map<String, String> systemVersions,
                 SourceWarnings warnings) {
             this(
-                    new InteractiveWriter(delegate, heading, color, listOnly, qualifiedPath, lineNumber,
-                            breakMatches, compactFile),
+                    new InteractiveWriter(delegate, heading, color, listOnly, showOrigin, lineNumber,
+                            breakMatches, compactFile, system, systemVersions),
                     warnings);
         }
 
@@ -322,10 +381,12 @@ final class Output {
         private final boolean heading;
         private final boolean color;
         private final boolean listOnly;
-        private final boolean qualifiedPath;
+        private final boolean showOrigin;
         private final boolean lineNumber;
         private final boolean breakMatches;
         private final boolean compactFile;
+        private final String system;
+        private final Map<String, String> systemVersions;
         private final StringBuilder line = new StringBuilder();
         private String currentGroup;
         private String currentUnit;
@@ -345,18 +406,22 @@ final class Output {
                 boolean heading,
                 boolean color,
                 boolean listOnly,
-                boolean qualifiedPath,
+                boolean showOrigin,
                 boolean lineNumber,
                 boolean breakMatches,
-                boolean compactFile) {
+                boolean compactFile,
+                String system,
+                Map<String, String> systemVersions) {
             this.delegate = delegate;
             this.heading = heading;
             this.color = color;
             this.listOnly = listOnly;
-            this.qualifiedPath = qualifiedPath;
+            this.showOrigin = showOrigin;
             this.lineNumber = lineNumber;
             this.breakMatches = breakMatches;
             this.compactFile = compactFile;
+            this.system = system;
+            this.systemVersions = systemVersions;
         }
 
         void sourceOrigin(String unit, String sourceFile, String origin) {
@@ -425,13 +490,20 @@ final class Output {
                     ? sourceOrigin
                     : null;
             var origin = source != null ? source : classOrigins.get(unit);
-            var path = qualifiedPath && origin != null ? origin : sourceFile;
+            var system = systemOrigin(origin);
+            var displayedUnit = showOrigin && system != null
+                    ? system + "/" + unit
+                    : unit;
+            var path = showOrigin && origin != null && system == null
+                    ? origin
+                    : sourceFile;
             var group = unit
                     + "("
                     + (origin != null ? origin : sourceFile)
                     + ")";
-            var displayedGroup = unit + "(" + path + ")";
+            var displayedGroup = displayedUnit + "(" + path + ")";
             int numericLine = Integer.parseInt(lineNumber);
+            resultOrigin(origin, sourceFile, numericLine);
             var rowHighlights = unit.equals(highlightUnit) && sourceFile.equals(highlightFile) && numericLine == highlightLine
                     ? highlights
                     : List.<SourceHighlight>of();
@@ -467,7 +539,7 @@ final class Output {
                 delegate.write('\n');
                 return;
             }
-            writeColored(UNIT, unit);
+            writeColored(UNIT, displayedUnit);
             delegate.write('(');
             delegate.write(path);
             if (this.lineNumber) {
@@ -483,8 +555,12 @@ final class Output {
 
         private void writeDeclarationRow(String unit, String declaration) throws IOException {
             var origin = classOrigins.get(unit);
+            resultOrigin(origin, null, null);
+            var system = systemOrigin(origin);
             var group = origin != null ? unit + "(" + origin + ")" : unit;
-            var displayedGroup = qualifiedPath && origin != null
+            var displayedGroup = showOrigin && system != null
+                    ? system + "/" + unit
+                    : showOrigin && origin != null
                     ? unit + "(" + origin + ")"
                     : unit;
             if (heading) {
@@ -496,8 +572,11 @@ final class Output {
                 delegate.write('\n');
                 return;
             }
-            writeColored(UNIT, unit);
-            if (qualifiedPath && origin != null) {
+            writeColored(UNIT,
+                    showOrigin && system != null
+                            ? system + "/" + unit
+                            : unit);
+            if (showOrigin && origin != null && system == null) {
                 delegate.write('(');
                 delegate.write(origin);
                 delegate.write(')');
@@ -525,13 +604,50 @@ final class Output {
         }
 
         private void writeSymbol(SymbolKind kind, String name, String location) throws IOException {
+            resultOrigin(location, null, null);
             writeColored(HEADING_KIND, kind.optionName());
             delegate.write(' ');
-            var displayedName = qualifiedPath && location != null
+            var system = systemOrigin(location);
+            var displayedName = showOrigin && system != null
+                    ? system + "/" + name
+                    : showOrigin && location != null
                     ? name + "(" + location + ")"
                     : name;
             writeColored(HEADING, displayedName);
             delegate.write('\n');
+        }
+
+        private void resultOrigin(String location, String source, Integer line) {
+            if (!(delegate instanceof ResultOutput output) || location == null) {
+                return;
+            }
+            var module = SearchEnvironment.jrtModuleName(location);
+            if (module != null) {
+                var path = URI.create(location).getPath();
+                int resourceStart = path.indexOf('/', 1) + 1;
+                output.resultOrigin(
+                        new ResultOrigin(
+                                "system",
+                                location,
+                                system,
+                                module,
+                                systemVersions.get(module),
+                                resourceStart > 0 ? path.substring(resourceStart) : null,
+                                source,
+                                line));
+                return;
+            }
+            output.resultOrigin(new ResultOrigin(location.startsWith("jar:") ? "archive" : "file", location, null,
+                    null, null, null, source, line));
+        }
+
+        private String systemOrigin(String origin) {
+            var module = SearchEnvironment.jrtModuleName(origin);
+            if (module == null) {
+                return null;
+            }
+            var version = systemVersions.get(module);
+            return version == null ? module : module + "@" + version;
         }
 
         private static String sourceHeadingKind(String sourceFile) {

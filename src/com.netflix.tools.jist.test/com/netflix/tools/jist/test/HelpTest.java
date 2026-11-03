@@ -273,6 +273,7 @@ class HelpTest {
                 Module resolution:
                   --system <jdk>|none                     System module location
                                                             (default: running JDK)
+                  --exclude-system-modules                 Exclude system modules from searches
                   --release <release>                     Attribute source using Java SE API signatures
                                                             (does not select matching JDK source)
                   -m, --module <M,...>                    Selected compilation modules
@@ -309,7 +310,7 @@ class HelpTest {
                   --format <format>                       Output format: text or json
                   --pretty                                Use headings and color
                   -l                                      Print matching symbols only
-                  --qualified-path                        Show the full source or ClassFile path
+                  --show-origin                           Show the origin of each result
                   -N, --no-line-number                    Suppress source line numbers
                   --break                                 Separate non-consecutive source matches
 

@@ -598,6 +598,9 @@ final class ClassFileRenderer {
 
     static Set<AccessFlag> listedClassFlags(ClassModel model) {
         var internalName = model.thisClass().asInternalName();
+        if (internalName.indexOf('$') < 0) {
+            return model.flags().flags();
+        }
         var innerClasses = model.findAttribute(Attributes.innerClasses());
         if (innerClasses.isPresent()) {
             for (var inner : innerClasses.get().classes()) {

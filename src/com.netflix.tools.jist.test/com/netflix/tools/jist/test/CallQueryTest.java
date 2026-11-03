@@ -82,10 +82,17 @@ class CallQueryTest {
                     @java.lang.Override public void touch() {}
                 }
                 """);
+        var stringCaller = directory.resolve("StringCaller.java");
+        Files.writeString(stringCaller, """
+                package example;
+                public class StringCaller {
+                    public String repeat(String value) { return value.repeat(2); }
+                }
+                """);
         var compiler = ToolProvider.getSystemJavaCompiler();
         try (var manager = compiler.getStandardFileManager(null, null, null)) {
             assertTrue(compiler.getTask(null, manager, null, List.of("-g", "-d", CLASSES.toString()), null,
-                    manager.getJavaFileObjects(target, caller, override)).call());
+                    manager.getJavaFileObjects(target, caller, override, stringCaller)).call());
         }
     }
 
@@ -155,6 +162,16 @@ class CallQueryTest {
             assertEquals(4, result.output().lines().count(), result.output());
             assertEquals(4, result.output().lines().distinct().count(), result.output());
         }
+    }
+
+    @Test
+    void excludedSystemModulesRemainAvailableForCallResolution() {
+        var result = run(false, "--exclude-system-modules", "--callers", "java.lang.String.repeat");
+
+        assertSuccess(result);
+        assertTrue(result.output().contains(
+                "example.StringCaller.repeat(java.lang.String) -> java.lang.String.repeat(int)"), result.output());
+        assertFalse(result.output().contains("java.lang.String.indent(int)"), result.output());
     }
 
     @Test

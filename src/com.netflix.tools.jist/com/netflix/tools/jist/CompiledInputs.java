@@ -48,7 +48,7 @@ final class CompiledInputs {
             scanEntry(module.location(), reader, consumer, module::includesResource);
         }
         var modules = environment.modules().systemPackages().keySet();
-        if ("none".equals(options.system()) || modules.isEmpty()) {
+        if (options.excludeSystemModules() || "none".equals(options.system()) || modules.isEmpty()) {
             return;
         }
         if (options.system() != null && !Files.isRegularFile(Path.of(options.system()).resolve("lib/modules"))) {

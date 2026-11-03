@@ -281,8 +281,8 @@ class SourceQueryTest {
     }
 
     @Test
-    void qualifiedPathExpandsInteractiveSourceHeadings() {
-        var result = run("--heading", "--color", "never", "--qualified-path", "--source", "signature",
+    void showOriginExpandsInteractiveSourceHeadings() {
+        var result = run("--heading", "--color", "never", "--show-origin", "--source", "signature",
                 SOURCE + ".run");
 
         assertEquals(0, result.exitCode(), result.error());
@@ -301,7 +301,7 @@ class SourceQueryTest {
 
     @Test
     void listIncludesOnlyARequestedQualifiedLocation() {
-        var result = run("-l", "--color", "never", "--qualified-path", SOURCE + ".run");
+        var result = run("-l", "--color", "never", "--show-origin", SOURCE + ".run");
 
         assertEquals(0, result.exitCode(), result.error());
         assertEquals(

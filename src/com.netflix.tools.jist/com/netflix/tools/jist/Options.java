@@ -29,6 +29,7 @@ public record Options(
         List<String> moduleSourcePaths,
         String target,
         String system,
+        boolean excludeApplicationClasses,
         boolean excludeSystemModules,
         String release,
         String module,
@@ -129,6 +130,7 @@ public record Options(
                 moduleSourcePaths,
                 target,
                 system,
+                excludeApplicationClasses,
                 excludeSystemModules,
                 release,
                 module,
@@ -167,6 +169,7 @@ public record Options(
                 moduleSourcePaths,
                 selectedTarget,
                 system,
+                excludeApplicationClasses,
                 excludeSystemModules,
                 release,
                 module,
@@ -224,6 +227,7 @@ public record Options(
                 Module resolution:
                   --system <jdk>|none                     System module location
                                                             (default: running JDK)
+                  --exclude-application-classes            Exclude application classes from searches
                   --exclude-system-modules                 Exclude system modules from searches
                   --release <release>                     Attribute source using Java SE API signatures
                                                             (does not select matching JDK source)

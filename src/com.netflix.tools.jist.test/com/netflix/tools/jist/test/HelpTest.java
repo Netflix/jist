@@ -76,6 +76,8 @@ class HelpTest {
         assertEquals(1, checker.isSupportedOption("--format"));
         assertEquals(1, checker.isSupportedOption("-C"));
         assertEquals(0, checker.isSupportedOption("--version"));
+        assertEquals(0, checker.isSupportedOption("--exclude-application-classes"));
+        assertEquals(0, checker.isSupportedOption("--exclude-system-modules"));
         for (var option : List.of("--module-path", "-p", "--upgrade-module-path", "--patch-module",
                 "--module-source-path", "--module", "-m", "--add-modules", "--add-reads", "--add-exports",
                 "--limit-modules", "--system", "--release")) {
@@ -273,6 +275,7 @@ class HelpTest {
                 Module resolution:
                   --system <jdk>|none                     System module location
                                                             (default: running JDK)
+                  --exclude-application-classes            Exclude application classes from searches
                   --exclude-system-modules                 Exclude system modules from searches
                   --release <release>                     Attribute source using Java SE API signatures
                                                             (does not select matching JDK source)

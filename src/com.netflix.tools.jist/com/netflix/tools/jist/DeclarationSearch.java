@@ -87,11 +87,13 @@ final class DeclarationSearch {
         try (var sources = environment.sources();
              var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             sources.prepareOrdinarySources();
-            if (readsUnnamedModule(opts)) {
-                listClassPathEntries(opts, out, parsePathList(opts.classPath()), visibility, emittedPackages,
-                        sources, executor);
+            if (!opts.excludeApplicationClasses()) {
+                if (readsUnnamedModule(opts)) {
+                    listClassPathEntries(opts, out, parsePathList(opts.classPath()), visibility, emittedPackages,
+                            sources, executor);
+                }
+                listModulePathEntries(opts, out, visibility, emittedPackages, sources, executor);
             }
-            listModulePathEntries(opts, out, visibility, emittedPackages, sources, executor);
             listSystemSymbols(opts, out, visibility, emittedPackages, sources, executor);
             listSourceSymbols(opts, out, emittedPackages);
         }
@@ -244,51 +246,53 @@ final class DeclarationSearch {
         var parsedSources = new HashMap<String, EnumeratedSource>();
         try (var sources = environment.sources()) {
             sources.prepareOrdinarySources();
-            if (readsUnnamedModule(opts)) {
-                for (var entry : parsePathList(opts.classPath())) {
+            if (!opts.excludeApplicationClasses()) {
+                if (readsUnnamedModule(opts)) {
+                    for (var entry : parsePathList(opts.classPath())) {
+                        listSourceContextEntry(
+                                opts,
+                                out,
+                                entry,
+                                null,
+                                null,
+                                _ -> true,
+                                visibility,
+                                sources,
+                                emittedSources,
+                                emittedPackages,
+                                parsedSources);
+                    }
+                }
+                for (var module : environment.moduleInputs()) {
+                    if (relationships == null
+                            && module.descriptor().isAutomatic()
+                            && (opts.kinds().isEmpty() || opts.listsModules())
+                            && matchesListedPrefix(opts, module.name())) {
+                        if (!printListSymbol(out, SymbolKind.MODULE, module.name(), unitLocation(module.location()))) {
+                            out.println(module.name() + ": " + renderAutomaticModuleDeclaration(module.descriptor()));
+                        }
+                    }
                     listSourceContextEntry(
                             opts,
                             out,
-                            entry,
-                            null,
-                            null,
-                            _ -> true,
+                            module.location(),
+                            module.name(),
+                            module.selected() ? null : module.visiblePackages(),
+                            module::includesResource,
                             visibility,
                             sources,
                             emittedSources,
                             emittedPackages,
                             parsedSources);
-                }
-            }
-            for (var module : environment.moduleInputs()) {
-                if (relationships == null
-                        && module.descriptor().isAutomatic()
-                        && (opts.kinds().isEmpty() || opts.listsModules())
-                        && matchesListedPrefix(opts, module.name())) {
-                    if (!printListSymbol(out, SymbolKind.MODULE, module.name(), unitLocation(module.location()))) {
-                        out.println(module.name() + ": " + renderAutomaticModuleDeclaration(module.descriptor()));
-                    }
-                }
-                listSourceContextEntry(
-                        opts,
-                        out,
-                        module.location(),
-                        module.name(),
-                        module.selected() ? null : module.visiblePackages(),
-                        module::includesResource,
-                        visibility,
-                        sources,
-                        emittedSources,
-                        emittedPackages,
-                        parsedSources);
-                if (opts.kinds().isEmpty() || opts.listsPackages()) {
-                    for (var packageName : module.visiblePackages()
-                            .stream()
-                            .sorted()
-                            .toList()) {
-                        if (emittedPackages.add(packageName) && matchesListedPrefix(opts, packageName)) {
-                            emitPackageSourceContext(opts, out, packageName, null, unitLocation(module.location()),
-                                    sources, emittedSources);
+                    if (opts.kinds().isEmpty() || opts.listsPackages()) {
+                        for (var packageName : module.visiblePackages()
+                                .stream()
+                                .sorted()
+                                .toList()) {
+                            if (emittedPackages.add(packageName) && matchesListedPrefix(opts, packageName)) {
+                                emitPackageSourceContext(opts, out, packageName, null, unitLocation(module.location()),
+                                        sources, emittedSources);
+                            }
                         }
                     }
                 }

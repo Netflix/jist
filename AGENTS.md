@@ -12,15 +12,17 @@ Jist is a symbol search and semantic relationship tool for Java compilation cont
   the option forms a union.
 - `--usages SYMBOL` finds semantic references to an exact type or member in compiled inputs and
   project source.
-- `--callers` and `--callees` accept an exact executable or a type. A type selects its declared
-  methods and constructors, excluding inherited executables. Default output preserves each
-  `caller -> callee` edge; `-l` intentionally lists only the matching executable symbols.
+- `--callers` and `--callees` accept executable or type targets by qualified name, exact simple
+  name, or delimiter-bounded suffix. A type selects its declared methods and constructors, excluding
+  inherited executables. Multiple matches form a union. Default output preserves each `caller ->
+  callee` edge; `-l` intentionally lists only the matching executable symbols.
 - One qualified prefix, exact usage symbol, source file, or ClassFile locator is accepted per
   invocation.
 - A target without a dot matches every symbol whose terminal simple name is exactly that target.
-  A target containing a dot is an exact, delimiter-bounded qualified prefix. Search does not perform
-  completion, substring matching, fuzzy scoring, ranking, typo correction, or implicit resolution of
-  partially qualified names.
+  A declaration target containing a dot is an exact, delimiter-bounded qualified prefix. Executable
+  relationship targets additionally accept delimiter-bounded type or member suffixes. Search does
+  not perform completion, substring matching, fuzzy scoring, ranking, typo correction, or implicit
+  resolution of other partially qualified names.
 - Default output uses literal source signatures when source is available and compiled signatures as
   its fallback. A Java file on a directory source path supersedes matching ClassFiles so uncompiled
   project changes are visible. Archive source enriches the matching ClassFile instead. Both are

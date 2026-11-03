@@ -51,21 +51,24 @@ final class RelationshipSearch implements Closeable {
                 search.parents(analysis.resolveType(name), search.supertypes, !options.direct());
             }
             for (var name : options.overrides()) {
-                var selection = environment.resolveSymbolSelection(name);
-                if (selection.member() == null) {
-                    throw new ToolException(1, "--overrides requires a method: " + name);
+                boolean found = false;
+                for (var selection : ExecutableTargets.resolve(options, environment, name)) {
+                    if (selection.member() == null) {
+                        continue;
+                    }
+                    var type = analysis.resolveType(selection.path());
+                    var methods = search.elements.getAllMembers(type).stream()
+                            .filter(element -> element.getKind() == ElementKind.METHOD)
+                            .map(ExecutableElement.class::cast)
+                            .filter(method -> method.getSimpleName().contentEquals(selection.member()))
+                            .filter(RelationshipSearch::overridable)
+                            .toList();
+                    search.overrides.addAll(methods);
+                    found |= !methods.isEmpty();
                 }
-                var type = analysis.resolveType(selection.path());
-                var methods = search.elements.getAllMembers(type).stream()
-                        .filter(element -> element.getKind() == ElementKind.METHOD)
-                        .map(ExecutableElement.class::cast)
-                        .filter(method -> method.getSimpleName().contentEquals(selection.member()))
-                        .filter(RelationshipSearch::overridable)
-                        .toList();
-                if (methods.isEmpty()) {
+                if (!found) {
                     throw new ToolException(1, "No overridable method: " + name);
                 }
-                search.overrides.addAll(methods);
             }
             analysis.checkDiagnostics();
             return search;

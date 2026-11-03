@@ -19,10 +19,10 @@ Capabilities include:
 - Search project source and compiled dependencies using standard Java path and module options
 - Show literal source signatures, documentation, definitions, enclosing types, or complete source files
 - Find semantic usages of an exact type or member, including overriding methods
-- Find caller and callee edges for an exact executable or every executable declared by a type
+- Find caller and callee edges for matching executables or every executable declared by a matching type
 - Produce terminal-friendly, stable line-oriented, or streaming JSON output
 
-Searches use exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. There is no substring matching, ranking, typo correction, or implicit resolution of partially qualified names.
+Searches use exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. Relationship options also accept a delimiter-bounded type or member suffix, such as `String.repeat`. There is no substring matching, ranking, typo correction, or implicit resolution of other partially qualified names.
 
 > [!IMPORTANT]
 > This tool is currently in preview. Please share feedback for any of the tools in [Discussions](https://github.com/Netflix/ja/discussions).
@@ -62,10 +62,17 @@ Find semantic references to an exact type or member:
 jist --usages java.lang.Integer.MAX_VALUE
 ```
 
-Find calls to any method or constructor declared by a type:
+Find calls to methods matching a simple name or type/member suffix:
 
 ```sh
-jist --callers java.lang.String
+jist --callers repeat
+jist --callers String.repeat
+```
+
+Find calls to any method or constructor declared by a matching type:
+
+```sh
+jist --callers String
 ```
 
 Show source documentation and the complete declaration:

@@ -103,13 +103,13 @@ public final class Jist implements ToolProvider, OptionChecker {
                 opts = opts.withSource(
                         opts.source() == SourceScope.NONE
                                         && opts.target() == null
-                                        && !opts.qualifiedPath()
+                                        && !opts.showOrigin()
                                         && !opts.relationships()
                                 ? null
                                 : opts.source() != null ? opts.source() : SourceScope.SIGNATURE);
             }
-            out = formattedOutput(opts, out, err, terminal);
             var environment = new SearchEnvironment(opts);
+            out = formattedOutput(opts, out, err, terminal, environment.modules().systemVersions());
             if (opts.relationships()) {
                 try (var relationships = opts.hierarchy() ? RelationshipSearch.open(opts, environment) : null;
                         var calls = opts.calls() ? CallSearch.open(opts, environment) : null) {
@@ -228,7 +228,8 @@ public final class Jist implements ToolProvider, OptionChecker {
         System.exit(exitCode);
     }
 
-    private static PrintWriter formattedOutput(Options opts, PrintWriter out, PrintWriter err, boolean terminal) {
+    private static PrintWriter formattedOutput(Options opts, PrintWriter out, PrintWriter err, boolean terminal,
+            Map<String, String> systemVersions) {
         var compactFile = compactSourceFileOutput(opts);
         var heading = !compactFile
                 && (opts.listOnly()
@@ -240,22 +241,30 @@ public final class Jist implements ToolProvider, OptionChecker {
                     terminal && System.getenv("NO_COLOR") == null && !"dumb".equals(System.getenv("TERM"));
         };
         var warnings = new SourceWarnings(err);
+        var system = "none".equals(opts.system())
+                ? null
+                : Path.of(opts.system() == null ? System.getProperty("java.home") : opts.system())
+                        .toAbsolutePath()
+                        .normalize()
+                        .toString();
         if (opts.format() == OutputFormat.JSON) {
             return new InteractivePrintWriter(
                     out,
                     false,
                     false,
                     opts.listOnly(),
-                    true,
+                    opts.showOrigin(),
                     opts.lineNumber(),
                     false,
                     false,
+                    system,
+                    systemVersions,
                     warnings);
         }
         return compactFile
                         || heading
                         || color
-                        || opts.qualifiedPath()
+                        || opts.showOrigin()
                         || !opts.lineNumber()
                         || opts.breakMatches()
                 ? new InteractivePrintWriter(
@@ -263,10 +272,12 @@ public final class Jist implements ToolProvider, OptionChecker {
                         heading,
                         color,
                         opts.listOnly(),
-                        opts.qualifiedPath(),
+                        opts.showOrigin(),
                         opts.lineNumber(),
                         opts.breakMatches(),
                         compactFile,
+                        system,
+                        systemVersions,
                         warnings)
                 : new SourceWarningPrintWriter(out, warnings);
     }
@@ -274,7 +285,7 @@ public final class Jist implements ToolProvider, OptionChecker {
     private static boolean compactSourceFileOutput(Options opts) {
         if (opts.target() == null
                 || opts.heading() != null
-                || opts.qualifiedPath()
+                || opts.showOrigin()
                 || opts.listOnly()) {
             return false;
         }

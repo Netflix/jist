@@ -23,6 +23,7 @@ import java.util.List;
 import javax.tools.ToolProvider;
 
 import com.netflix.tools.jist.Jist;
+import com.netflix.tools.json.Json;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -173,6 +174,36 @@ class ModuleCallQueryTest {
             success(result);
             assertFalse(result.output().contains("library.internal.Hidden"), result.output());
         }
+    }
+
+    @Test
+    void showOriginUsesModuleQualifiedSystemSourceLocations() {
+        var result = invoke(List.of("--limit-modules", "java.base", "--callers",
+                "java.lang.String.repeat", "--show-origin"));
+
+        success(result);
+        assertTrue(result.output().contains("java.base@"), result.output());
+        assertTrue(result.output().contains("/java.lang.String(String.java:"), result.output());
+        assertFalse(result.output().contains("jrt:/"), result.output());
+        assertFalse(result.output().contains("String.class:"), result.output());
+    }
+
+    @Test
+    void jsonOutputDescribesSystemOrigins() {
+        var result = invoke(List.of("--limit-modules", "java.base", "--callers",
+                "java.lang.String.repeat", "--format", "json"));
+
+        success(result);
+        var output = Json.parse(result.output());
+        var origin = output.get("results").asList().getFirst().get("origin");
+        assertEquals("system", origin.get("kind").asString());
+        assertEquals("java.base", origin.get("module").asString());
+        assertFalse(origin.get("version").asString().isBlank());
+        assertEquals(Path.of(System.getProperty("java.home")).toAbsolutePath().normalize().toString(),
+                origin.get("system").asString());
+        assertTrue(origin.get("resource").asString().endsWith(".class"));
+        assertTrue(origin.get("source").asString().endsWith(".java"));
+        assertTrue(origin.get("line").asInt() > 0);
     }
 
     @Test

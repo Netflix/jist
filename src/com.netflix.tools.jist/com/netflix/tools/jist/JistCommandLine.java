@@ -34,6 +34,7 @@ final class JistCommandLine {
     private final ToolOption sourcePath = option("--source-path", "PATH", "Where to find source files", "-sourcepath");
     private final ToolOption moduleSourcePath = option("--module-source-path", "PATH", "Sources for multiple modules");
     private final ToolOption system = option("--system", "JDK|none", "System module location");
+    private final ToolOption excludeSystemModules = flag("--exclude-system-modules", "Exclude system modules from searches");
     private final ToolOption module = option("--module", "MODULE[,MODULE...]", "Selected compilation modules", "-m");
     private final ToolOption addModules = option("--add-modules", "MODULE[,MODULE...]", "Root modules");
     private final ToolOption addExports = option("--add-exports", "MODULE/PACKAGE=TARGET", "Add a module export");
@@ -83,7 +84,7 @@ final class JistCommandLine {
     private final ToolOption heading = flag("--heading", "Group results under source headings");
     private final ToolOption noHeading = flag("--no-heading", "Keep one complete result per line");
     private final ToolOption listOnly = flag("-l", "Print matching symbols only");
-    private final ToolOption qualifiedPath = flag("--qualified-path", "Show the full source or ClassFile path");
+    private final ToolOption showOrigin = flag("--show-origin", "Show the origin of each result");
     private final ToolOption lineNumber = flag("--line-number", "Show source line numbers", "-n");
     private final ToolOption noLineNumber = flag("--no-line-number", "Suppress source line numbers", "-N");
     private final ToolOption breakMatches = flag("--break", "Separate non-consecutive source matches");
@@ -100,6 +101,7 @@ final class JistCommandLine {
                     sourcePath,
                     moduleSourcePath,
                     system,
+                    excludeSystemModules,
                     module,
                     addModules,
                     addExports,
@@ -125,7 +127,7 @@ final class JistCommandLine {
                     heading,
                     noHeading,
                     listOnly,
-                    qualifiedPath,
+                    showOrigin,
                     lineNumber,
                     noLineNumber,
                     breakMatches,
@@ -267,6 +269,7 @@ final class JistCommandLine {
                 parsed.values(moduleSourcePath),
                 target,
                 last(parsed, system),
+                parsed.contains(excludeSystemModules),
                 last(parsed, release),
                 last(parsed, module),
                 merge(parsed.values(addModules)),
@@ -288,7 +291,7 @@ final class JistCommandLine {
                 Optional.ofNullable(last(parsed, format)).map(OutputFormat::parse).orElse(OutputFormat.TEXT),
                 selectedHeading,
                 parsed.contains(listOnly),
-                parsed.contains(qualifiedPath),
+                parsed.contains(showOrigin),
                 selectedLineNumber,
                 selectedBreakMatches,
                 parsed.contains(help));

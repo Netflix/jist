@@ -103,6 +103,7 @@ final class CallSearch implements Closeable {
 
     void search(PrintWriter out) throws IOException, ToolException {
         try (var sources = environment.sources()) {
+            sources.prepareOrdinarySources();
             CompiledInputs.scan(options, environment, InputStream::readAllBytes,
                     (bytes, location) -> compiled(bytes, location, sources, out));
             var candidates = new LinkedHashMap<URI, SourceCandidate>();

@@ -123,6 +123,7 @@ final class UsageSearch {
 
     private void scanCompiledUsages(Options opts, UsageTarget target, UsageOutput out) throws IOException, ToolException {
         try (var sources = environment.sources()) {
+            sources.prepareOrdinarySources();
             var classReader = new UsageClassReader(target);
             out.sourceAttributor(location -> attributeAttachedSourceUnit(location, opts, target, out));
             try {

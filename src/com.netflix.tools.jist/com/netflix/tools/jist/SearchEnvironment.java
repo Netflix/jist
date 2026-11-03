@@ -265,7 +265,8 @@ final class SearchEnvironment {
 
     record ModuleResolution(List<ModuleInput> applicationModules,
                             Map<String, Set<String>> applicationPackages,
-                            Map<String, Set<String>> systemPackages) {}
+                            Map<String, Set<String>> systemPackages,
+                            Map<String, String> systemVersions) {}
 
     List<ModuleInput> moduleInputs() throws IOException, ToolException {
         return modules().applicationModules();
@@ -300,6 +301,7 @@ final class SearchEnvironment {
         var roots = moduleRoots(opts, applicationNames, systemNames);
         if (roots.isEmpty())
             return new ModuleResolution(List.of(),
+                                        Map.of(),
                                         Map.of(),
                                         Map.of());
 
@@ -366,9 +368,17 @@ final class SearchEnvironment {
                 systems.put(module.name(), visiblePackages);
             }
         }
+        var systemVersions = systems.keySet().stream()
+                .map(systemReferences::get)
+                .filter(Objects::nonNull)
+                .filter(reference -> reference.descriptor().rawVersion().isPresent())
+                .collect(Collectors.toUnmodifiableMap(
+                        reference -> reference.descriptor().name(),
+                        reference -> reference.descriptor().rawVersion().orElseThrow().toString()));
         return new ModuleResolution(List.copyOf(applications),
                                     Map.copyOf(applicationPackages),
-                                    Map.copyOf(systems));
+                                    Map.copyOf(systems),
+                                    systemVersions);
     }
 
     private static Map<String, java.lang.module.ModuleReference> referencesByName(java.lang.module.ModuleFinder finder) {

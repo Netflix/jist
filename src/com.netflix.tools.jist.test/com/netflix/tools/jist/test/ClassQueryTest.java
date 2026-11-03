@@ -698,6 +698,26 @@ class ClassQueryTest {
     }
 
     @Test
+    void excludedApplicationClassesLeaveSourceEnumeration(@TempDir Path source) throws Exception {
+        var directory = Files.createDirectories(source.resolve("project"));
+        Files.writeString(directory.resolve("SourceType.java"), """
+                package project;
+                public class SourceType extends com.example.Example {}
+                """);
+
+        var result = run(
+                "--class-path", ROOT.resolve("classes").toString(),
+                "--source-path", source.toString(),
+                "--exclude-application-classes",
+                "--exclude-system-modules",
+                "-k", "type",
+                "-l");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals("class project.SourceType\n", result.output());
+    }
+
+    @Test
     void allSourcePathInputsParticipateInEnumeration() {
         var result = run("--source-path", ROOT.resolve("src") + File.pathSeparator + ROOT.resolve("backing"));
 

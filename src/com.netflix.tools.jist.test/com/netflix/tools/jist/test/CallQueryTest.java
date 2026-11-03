@@ -175,6 +175,28 @@ class CallQueryTest {
     }
 
     @Test
+    void excludedApplicationClassesRemainAvailableForCallResolution(@TempDir Path source) throws Exception {
+        var directory = Files.createDirectories(source.resolve("project"));
+        Files.writeString(directory.resolve("SourceCaller.java"), """
+                package project;
+                public class SourceCaller {
+                    public void run(example.Target target) { target.touch(); }
+                }
+                """);
+
+        var result = invoke(List.of(
+                "--limit-modules", "java.base",
+                "--class-path", CLASSES.toString(),
+                "--source-path", source.toString(),
+                "--exclude-application-classes",
+                "--callers", "example.Target.touch",
+                "-l"));
+
+        assertSuccess(result);
+        assertEquals("method project.SourceCaller.run(example.Target)\n", result.output());
+    }
+
+    @Test
     void jsonOutputPreservesCallerToCalleeRelationships() {
         var result = run(false, "--callers", "example.Target.make", "--format", "json");
 

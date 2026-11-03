@@ -39,13 +39,15 @@ final class CompiledInputs {
 
     static void scan(Options options, SearchEnvironment environment, Reader reader, Consumer consumer)
             throws IOException, ToolException {
-        if (readsUnnamedModule(options)) {
-            for (var path : parsePathList(options.classPath())) {
-                scanEntry(path, reader, consumer, _ -> true);
+        if (!options.excludeApplicationClasses()) {
+            if (readsUnnamedModule(options)) {
+                for (var path : parsePathList(options.classPath())) {
+                    scanEntry(path, reader, consumer, _ -> true);
+                }
             }
-        }
-        for (var module : environment.moduleInputs()) {
-            scanEntry(module.location(), reader, consumer, module::includesResource);
+            for (var module : environment.moduleInputs()) {
+                scanEntry(module.location(), reader, consumer, module::includesResource);
+            }
         }
         var modules = environment.modules().systemPackages().keySet();
         if (options.excludeSystemModules() || "none".equals(options.system()) || modules.isEmpty()) {

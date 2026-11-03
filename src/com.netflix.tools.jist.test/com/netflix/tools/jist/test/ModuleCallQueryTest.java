@@ -26,6 +26,7 @@ import com.netflix.tools.jist.Jist;
 import com.netflix.tools.json.Json;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -101,6 +102,31 @@ class ModuleCallQueryTest {
             assertFalse(result.output().contains("library.internal.Hidden"), result.output());
             assertFalse(result.output().contains("unrelated.api.Other"), result.output());
         }
+    }
+
+    @Test
+    void excludedApplicationClassesRemainAvailableForModuleResolution(@TempDir Path source) throws Exception {
+        var module = source.resolve("application");
+        Files.createDirectories(module.resolve("application/internal"));
+        Files.writeString(module.resolve("module-info.java"), "module application { requires library; }");
+        Files.writeString(module.resolve("application/internal/SourceCaller.java"), """
+                package application.internal;
+                public class SourceCaller {
+                    public static void run() { library.api.Target.touch(); }
+                }
+                """);
+
+        var result = invoke(List.of(
+                "--limit-modules", "java.base,application,library",
+                "--module-path", MODULES.resolve("library").toString(),
+                "--module-source-path", source.toString(),
+                "--module", "application",
+                "--exclude-application-classes",
+                "--callers", "library.api.Target.touch",
+                "-l"));
+
+        success(result);
+        assertEquals("method application.internal.SourceCaller.run()\n", result.output());
     }
 
     @Test

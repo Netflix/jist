@@ -136,7 +136,7 @@ final class JistCommandLine {
                     noBreak,
                     pretty,
                     help)
-            .operand("SYMBOL|SOURCE-OR-CLASS-FILE", "Symbol prefix, source file, or class file", Cardinality.ZERO_OR_ONE)
+            .operand("SYMBOL|SOURCE-OR-CLASS-FILE", "Symbol name or prefix, list-mode wildcard, source file, or class file", Cardinality.ZERO_OR_ONE)
             .workingDirectory()
             .argumentFiles()
             .javaToolOptions()

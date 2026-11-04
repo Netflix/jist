@@ -587,6 +587,39 @@ class ClassQueryTest {
     }
 
     @Test
+    void listModeAcceptsWildcardDeclarationNames() {
+        var types = run(
+                "--system",
+                "none",
+                "--class-path",
+                ROOT.resolve("classes").toString(),
+                "--source",
+                "none",
+                "-l",
+                "--kind",
+                "type",
+                "*ample*");
+        var methods = run(
+                "--system",
+                "none",
+                "--class-path",
+                ROOT.resolve("classes").toString(),
+                "--source",
+                "none",
+                "-l",
+                "--kind",
+                "method",
+                "*run*");
+
+        assertEquals(0, types.exitCode(), types.error());
+        assertEquals("class com.example.Example\n", types.output());
+        assertEquals(0, methods.exitCode(), methods.error());
+        assertTrue(methods.output().contains("method com.example.Example.run(int)"), methods.output());
+        assertTrue(methods.output().contains("method com.example.Overloads.run()"), methods.output());
+        assertFalse(methods.output().contains("com.example.Example.internal()"), methods.output());
+    }
+
+    @Test
     void kindsCanBeCombined() {
         var result = run(
                 "--system",

@@ -250,7 +250,8 @@ public record Options(
 
                 Input:
                   <symbol|source-or-class-file>           Exact simple name, qualified symbol
-                                                            prefix, source file, or class file
+                                                            prefix, list-mode wildcard name pattern,
+                                                            source file, or class file
                   @<file>                                 Read options from file
                   -C <directory>                          Run in the specified directory
                   -cp, -classpath, --class-path <path>    Where to find unnamed-module classes

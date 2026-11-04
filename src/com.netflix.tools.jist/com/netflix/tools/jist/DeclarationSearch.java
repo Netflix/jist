@@ -1370,10 +1370,39 @@ final class DeclarationSearch {
             return true;
         }
         var prefix = opts.target();
+        if (opts.listOnly() && prefix.indexOf('*') >= 0) {
+            var candidate = simpleNameTarget(prefix) ? UsageSearch.terminalName(symbol) : symbol;
+            return wildcardMatches(prefix, candidate);
+        }
         if (simpleNameTarget(prefix)) {
             return UsageSearch.terminalName(symbol).equals(prefix);
         }
         return symbol.equals(prefix) || symbol.startsWith(prefix + ".");
+    }
+
+    private static boolean wildcardMatches(String pattern, String candidate) {
+        int patternIndex = 0;
+        int candidateIndex = 0;
+        int wildcardIndex = -1;
+        int wildcardCandidateIndex = -1;
+        while (candidateIndex < candidate.length()) {
+            if (patternIndex < pattern.length() && pattern.charAt(patternIndex) == candidate.charAt(candidateIndex)) {
+                patternIndex++;
+                candidateIndex++;
+            } else if (patternIndex < pattern.length() && pattern.charAt(patternIndex) == '*') {
+                wildcardIndex = patternIndex++;
+                wildcardCandidateIndex = candidateIndex;
+            } else if (wildcardIndex >= 0) {
+                patternIndex = wildcardIndex + 1;
+                candidateIndex = ++wildcardCandidateIndex;
+            } else {
+                return false;
+            }
+        }
+        while (patternIndex < pattern.length() && pattern.charAt(patternIndex) == '*') {
+            patternIndex++;
+        }
+        return patternIndex == pattern.length();
     }
 
     static boolean simpleNameTarget(String target) {

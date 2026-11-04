@@ -32,8 +32,12 @@ final class Output {
             String source,
             Integer line) {}
 
+    record SourceRange(String location, int lineCount, int startLine, int endLine) {}
+
     private interface ResultOutput {
         void resultOrigin(ResultOrigin origin);
+
+        void resultSource(SourceRange source);
     }
 
     static final class JsonPrintWriter extends PrintWriter implements ResultOutput {
@@ -53,6 +57,11 @@ final class Output {
             json.resultOrigin(origin);
         }
 
+        @Override
+        public void resultSource(SourceRange source) {
+            json.resultSource(source);
+        }
+
         void finish() {
             flush();
             json.finish();
@@ -65,6 +74,7 @@ final class Output {
         private boolean first = true;
         private boolean finished;
         private ResultOrigin origin;
+        private SourceRange source;
 
         JsonWriter(Writer delegate) {
             this.delegate = delegate;
@@ -93,6 +103,7 @@ final class Output {
         private void emitLine() throws IOException {
             if (line.isEmpty()) {
                 origin = null;
+                source = null;
                 return;
             }
             if (!first) {
@@ -103,9 +114,13 @@ final class Output {
             if (origin != null) {
                 writeOrigin(origin);
             }
+            if (source != null) {
+                writeSource(source);
+            }
             delegate.write('}');
             line.setLength(0);
             origin = null;
+            source = null;
             first = false;
         }
 
@@ -125,6 +140,18 @@ final class Output {
             delegate.write('}');
         }
 
+        private void writeSource(SourceRange value) throws IOException {
+            delegate.write(",\"source\":{");
+            writeField("location", value.location(), false);
+            delegate.write(",\"lineCount\":");
+            delegate.write(Integer.toString(value.lineCount()));
+            delegate.write(",\"range\":{\"startLine\":");
+            delegate.write(Integer.toString(value.startLine()));
+            delegate.write(",\"endLine\":");
+            delegate.write(Integer.toString(value.endLine()));
+            delegate.write("}}");
+        }
+
         private void writeField(String name, String value, boolean comma) throws IOException {
             if (value == null) {
                 return;
@@ -139,6 +166,10 @@ final class Output {
 
         void resultOrigin(ResultOrigin value) {
             origin = value;
+        }
+
+        void resultSource(SourceRange value) {
+            source = value;
         }
 
         void finish() {
@@ -209,6 +240,10 @@ final class Output {
         boolean listOnly();
 
         void symbol(SymbolKind kind, String name, String location);
+
+        default void symbol(SymbolKind kind, String name, String location, SourceRange source) {
+            symbol(kind, name, location);
+        }
     }
 
     interface SourceWarningOutput {
@@ -283,9 +318,14 @@ final class Output {
 
         @Override
         public void symbol(SymbolKind kind, String name, String location) {
+            symbol(kind, name, location, null);
+        }
+
+        @Override
+        public void symbol(SymbolKind kind, String name, String location, SourceRange source) {
             counter.match();
             if (delegate instanceof SymbolOutput output) {
-                output.symbol(kind, name, location);
+                output.symbol(kind, name, location, source);
             }
         }
 
@@ -346,8 +386,13 @@ final class Output {
 
         @Override
         public void symbol(SymbolKind kind, String name, String location) {
+            symbol(kind, name, location, null);
+        }
+
+        @Override
+        public void symbol(SymbolKind kind, String name, String location, SourceRange source) {
             try {
-                interactive.writeSymbol(kind, name, location);
+                interactive.writeSymbol(kind, name, location, source);
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
@@ -603,8 +648,11 @@ final class Output {
             }
         }
 
-        private void writeSymbol(SymbolKind kind, String name, String location) throws IOException {
+        private void writeSymbol(SymbolKind kind, String name, String location, SourceRange source) throws IOException {
             resultOrigin(location, null, null);
+            if (delegate instanceof ResultOutput output && source != null) {
+                output.resultSource(source);
+            }
             writeColored(HEADING_KIND, kind.optionName());
             delegate.write(' ');
             var system = systemOrigin(location);

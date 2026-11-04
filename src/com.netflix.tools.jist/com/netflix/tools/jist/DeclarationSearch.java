@@ -27,6 +27,7 @@ import javax.tools.ToolProvider;
 import com.netflix.tools.jist.CompiledInputs.Filter;
 import com.netflix.tools.jist.Output.CountingPrintWriter;
 import com.netflix.tools.jist.Output.OriginOutput;
+import com.netflix.tools.jist.Output.SourceRange;
 import com.netflix.tools.jist.Output.SourceWarningOutput;
 import com.netflix.tools.jist.Output.SymbolOutput;
 import com.netflix.tools.jist.SourceModel.Attribution;
@@ -552,7 +553,10 @@ final class DeclarationSearch {
         var internalName = model.thisClass().asInternalName();
         int slash = internalName.lastIndexOf('/');
         var relativePath = (slash < 0 ? "" : internalName.substring(0, slash + 1)) + sourceFileName;
-        var source = opts.source() == SourceScope.NONE ? null : sources.find(relativePath, classLocation, internalName + CLASS_EXT);
+        var source = opts.source() == SourceScope.NONE
+                        && !(opts.listOnly() && opts.format() == OutputFormat.JSON)
+                ? null
+                : sources.find(relativePath, classLocation, internalName + CLASS_EXT);
         final SymbolSource symbolSource;
         final List<ContextMatch> matches;
         if (source != null
@@ -787,7 +791,11 @@ final class DeclarationSearch {
     void searchSymbols(Options opts, SymbolSelection query, PrintWriter out) throws IOException, ToolException {
         var symbols = new CountingPrintWriter(out);
         var listing = opts.kinds().isEmpty() ? opts.withTargetAndKinds(opts.target(), defaultKinds()) : opts;
-        listClasses(listing, symbols);
+        if (opts.listOnly() && opts.format() == OutputFormat.JSON) {
+            listSourceContexts(listing, symbols);
+        } else {
+            listClasses(listing, symbols);
+        }
         if (symbols.count() == 0) {
             throw new ToolException(1,
                     simpleNameTarget(opts.target()) ? "Symbol not found: " + query.path() : "Class not found: " + query.path() + "; no symbol prefix matches");
@@ -1896,7 +1904,17 @@ final class DeclarationSearch {
                         return offset >= 0 ? offset : Integer.MAX_VALUE;
                     }))
                     .toList()) {
-                output.symbol(match.kind(), match.listedName(), location);
+                var declaration = match.attribution().declaration();
+                var sourceRange = source.model() != null
+                                && source.sourceLocation() != null
+                                && declaration.present()
+                        ? new SourceRange(
+                                source.sourceLocation(),
+                                source.model().contentLineCount(),
+                                declaration.startLine(),
+                                declaration.endLine())
+                        : null;
+                output.symbol(match.kind(), match.listedName(), location, sourceRange);
             }
             out.flush();
             return;

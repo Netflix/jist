@@ -1838,6 +1838,7 @@ class ClassQueryTest {
                 "--system", "none",
                 "--class-path", ROOT.resolve("classes").toString(),
                 "--source-path", ROOT.resolve("src").toString(),
+                "--exclude-application-classes",
                 "-l", "--source", "none", "--format", "json", "*Example*");
 
         assertEquals(0, result.exitCode(), result.error());
@@ -1855,6 +1856,7 @@ class ClassQueryTest {
                 "--system", "none",
                 "--class-path", ROOT.resolve("classes").toString(),
                 "--source-path", ROOT.resolve("src").toString(),
+                "--exclude-application-classes",
                 "-l", "--source", "none", "--kind", "method", "--format", "json", "*Example.run*");
         assertEquals(0, methodResult.exitCode(), methodResult.error());
         var methods = Json.parse(methodResult.output()).get("results").asList();

@@ -37,10 +37,13 @@ import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.ModuleTree;
+import com.sun.source.tree.Tree;
 import com.sun.source.tree.Tree.Kind;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.JavacTask;
+import com.sun.source.util.SourcePositions;
 import com.sun.source.util.TreePathScanner;
+import com.sun.source.util.Trees;
 
 import static com.netflix.tools.jist.ClassFileRenderer.appendDeclarationAnnotations;
 import static com.netflix.tools.jist.ClassFileRenderer.compiledModuleName;
@@ -553,10 +556,7 @@ final class DeclarationSearch {
         var internalName = model.thisClass().asInternalName();
         int slash = internalName.lastIndexOf('/');
         var relativePath = (slash < 0 ? "" : internalName.substring(0, slash + 1)) + sourceFileName;
-        var source = opts.source() == SourceScope.NONE
-                        && !(opts.listOnly() && opts.format() == OutputFormat.JSON)
-                ? null
-                : sources.find(relativePath, classLocation, internalName + CLASS_EXT);
+        var source = opts.source() == SourceScope.NONE ? null : sources.find(relativePath, classLocation, internalName + CLASS_EXT);
         final SymbolSource symbolSource;
         final List<ContextMatch> matches;
         if (source != null
@@ -791,11 +791,7 @@ final class DeclarationSearch {
     void searchSymbols(Options opts, SymbolSelection query, PrintWriter out) throws IOException, ToolException {
         var symbols = new CountingPrintWriter(out);
         var listing = opts.kinds().isEmpty() ? opts.withTargetAndKinds(opts.target(), defaultKinds()) : opts;
-        if (opts.listOnly() && opts.format() == OutputFormat.JSON) {
-            listSourceContexts(listing, symbols);
-        } else {
-            listClasses(listing, symbols);
-        }
+        listClasses(listing, symbols);
         if (symbols.count() == 0) {
             throw new ToolException(1,
                     simpleNameTarget(opts.target()) ? "Symbol not found: " + query.path() : "Class not found: " + query.path() + "; no symbol prefix matches");
@@ -1057,7 +1053,12 @@ final class DeclarationSearch {
                                     fileManager.getJavaFileObjects(sourceFile));
                             var units = task.parse().iterator();
                             if (units.hasNext()) {
-                                new SourceSymbolScanner(out, opts, emittedPackages).scan(units.next(), null);
+                                var positions = opts.listOnly() && opts.format() == OutputFormat.JSON
+                                        ? Trees.instance(task).getSourcePositions()
+                                        : null;
+                                new SourceSymbolScanner(
+                                        out, opts, emittedPackages, key -> true, positions, unitLocation(sourceFile))
+                                        .scan(units.next(), null);
                             }
                         });
             }
@@ -1309,8 +1310,12 @@ final class DeclarationSearch {
 
     private static void printListedSymbol(PrintWriter out, Options opts, SymbolKind kind,
             String unitName, String target, String text) {
-        printListedSymbol(out, opts, kind, unitName, target, target,
-                text);
+        printListedSymbol(out, opts, kind, unitName, target, target, text, null);
+    }
+
+    private static void printListedSymbol(PrintWriter out, Options opts, SymbolKind kind,
+            String unitName, String target, String text, SourceRange source) {
+        printListedSymbol(out, opts, kind, unitName, target, target, text, source);
     }
 
     private static void printListedSymbol(
@@ -1321,10 +1326,22 @@ final class DeclarationSearch {
             String target,
             String listedName,
             String text) {
+        printListedSymbol(out, opts, kind, unitName, target, listedName, text, null);
+    }
+
+    private static void printListedSymbol(
+            PrintWriter out,
+            Options opts,
+            SymbolKind kind,
+            String unitName,
+            String target,
+            String listedName,
+            String text,
+            SourceRange source) {
         if (!matchesListedPrefix(opts, target)) {
             return;
         }
-        if (printListSymbol(out, kind, listedName, null)) {
+        if (printListSymbol(out, kind, listedName, source == null ? null : source.location(), source)) {
             return;
         }
         out.println(unitName + ": " + text);
@@ -1332,10 +1349,15 @@ final class DeclarationSearch {
 
     private static boolean printListSymbol(PrintWriter out, SymbolKind kind, String name,
             String location) {
+        return printListSymbol(out, kind, name, location, null);
+    }
+
+    private static boolean printListSymbol(PrintWriter out, SymbolKind kind, String name,
+            String location, SourceRange source) {
         if (!(out instanceof SymbolOutput output) || !output.listOnly()) {
             return false;
         }
-        output.symbol(kind, name, location);
+        output.symbol(kind, name, location, source);
         return true;
     }
 
@@ -1461,8 +1483,12 @@ final class DeclarationSearch {
         private final Options opts;
         private final Set<String> emittedPackages;
         private final Predicate<String> selectedDeclaration;
+        private final SourcePositions positions;
+        private final String sourceLocation;
         private final Deque<String> classNames = new ArrayDeque<>();
         private final Deque<Boolean> emittedClasses = new ArrayDeque<>();
+        private CompilationUnitTree unit;
+        private int lineCount;
         private String packageName = "";
         private String unitName = "";
 
@@ -1476,14 +1502,28 @@ final class DeclarationSearch {
 
         SourceSymbolScanner(PrintWriter out, Options opts, Set<String> emittedPackages,
                 Predicate<String> selectedDeclaration) {
+            this(out, opts, emittedPackages, selectedDeclaration, null, null);
+        }
+
+        SourceSymbolScanner(PrintWriter out, Options opts, Set<String> emittedPackages,
+                Predicate<String> selectedDeclaration, SourcePositions positions, String sourceLocation) {
             this.out = out;
             this.opts = opts;
             this.emittedPackages = emittedPackages;
             this.selectedDeclaration = selectedDeclaration;
+            this.positions = positions;
+            this.sourceLocation = sourceLocation;
         }
 
         @Override
         public Void visitCompilationUnit(CompilationUnitTree tree, Void unused) {
+            unit = tree;
+            if (positions != null) {
+                long end = positions.getEndPosition(tree, tree);
+                if (end > 0) {
+                    lineCount = Math.toIntExact(tree.getLineMap().getLineNumber(end - 1));
+                }
+            }
             packageName = tree.getPackageName() == null ? "" : tree.getPackageName().toString();
             var sourceName = Path.of(tree.getSourceFile().getName())
                     .getFileName()
@@ -1504,7 +1544,7 @@ final class DeclarationSearch {
                            .append(packageName)
                            .append(';');
                 printListedSymbol(out, opts, SymbolKind.PACKAGE, packageName, packageName,
-                        declaration.toString());
+                        declaration.toString(), sourceRange(tree.getPackageName()));
             }
             return super.visitCompilationUnit(tree, unused);
         }
@@ -1514,7 +1554,7 @@ final class DeclarationSearch {
             var moduleName = tree.getName().toString();
             if (opts.listsModules() && matchesListedPrefix(opts, moduleName)) {
                 printListedSymbol(out, opts, SymbolKind.MODULE, moduleName, moduleName,
-                        compactSourceLine(tree.toString()));
+                        compactSourceLine(tree.toString()), sourceRange(tree));
             }
             return super.visitModule(tree, unused);
         }
@@ -1542,7 +1582,7 @@ final class DeclarationSearch {
                             .getFlags(),
                             implicitlyPublic)) {
                 printListedSymbol(out, opts, SymbolKind.classKind(tree), unitName, className,
-                        renderSourceTypeDeclaration(tree));
+                        renderSourceTypeDeclaration(tree), sourceRange(tree));
             }
             classNames.addLast(className);
             emittedClasses.addLast(sourceOnly);
@@ -1566,7 +1606,7 @@ final class DeclarationSearch {
                 var symbol = listedMemberTarget(opts, classNames.getLast(),
                         tree.getName().toString());
                 printListedSymbol(out, opts, SymbolKind.FIELD, unitName, symbol,
-                        compactSourceLine(tree.toString()) + ";");
+                        compactSourceLine(tree.toString()) + ";", sourceRange(tree));
             }
             return super.visitVariable(tree, unused);
         }
@@ -1589,10 +1629,27 @@ final class DeclarationSearch {
                 if (selectedDeclaration.test(attributionKey(classNames.getLast(), keyName, ordinal))) {
                     var symbol = listedMemberTarget(opts, classNames.getLast(), name);
                     printListedSymbol(out, opts, SymbolKind.METHOD, unitName, symbol,
-                            listedSourceMethodSignature(classNames.getLast(), tree), renderSourceMethodDeclaration(tree));
+                            listedSourceMethodSignature(classNames.getLast(), tree), renderSourceMethodDeclaration(tree),
+                            sourceRange(tree));
                 }
             }
             return super.visitMethod(tree, unused);
+        }
+
+        private SourceRange sourceRange(Tree tree) {
+            if (positions == null || sourceLocation == null || unit == null || lineCount < 1 || tree == null) {
+                return null;
+            }
+            long start = positions.getStartPosition(unit, tree);
+            long end = positions.getEndPosition(unit, tree);
+            if (start < 0 || end <= start) {
+                return null;
+            }
+            return new SourceRange(
+                    sourceLocation,
+                    lineCount,
+                    Math.toIntExact(unit.getLineMap().getLineNumber(start)),
+                    Math.toIntExact(unit.getLineMap().getLineNumber(end - 1)));
         }
 
         private boolean currentClassIsEmitted() {

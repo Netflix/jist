@@ -22,7 +22,7 @@ Capabilities include:
 - Find caller and callee edges for matching executables or every executable declared by a matching type
 - Produce terminal-friendly, stable line-oriented, or streaming JSON output
 
-Searches use exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. Relationship options also accept a delimiter-bounded type or member suffix, such as `String.repeat`. There is no substring matching, ranking, typo correction, or implicit resolution of other partially qualified names.
+Searches use exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. List mode also accepts `*` wildcards for declaration-name matching. Relationship options accept a delimiter-bounded type or member suffix, such as `String.repeat`. There is no ranking, typo correction, or implicit resolution of other partially qualified names.
 
 > [!IMPORTANT]
 > This tool is currently in preview. Please share feedback for any of the tools in [Discussions](https://github.com/Netflix/ja/discussions).
@@ -48,6 +48,12 @@ Find every visible symbol with a complete simple name:
 
 ```sh
 jist HttpClient
+```
+
+List declarations whose terminal names contain a fragment:
+
+```sh
+jist -l --source none '*Queue*'
 ```
 
 Select an exact package, type, or member prefix with a qualified name:

@@ -153,7 +153,9 @@ public final class Jist implements ToolProvider, OptionChecker {
                 }
                 if (simpleNameTarget(opts.target())) {
                     var listing = opts.kinds().isEmpty() ? opts.withKinds(defaultKinds()) : opts;
-                    if (opts.source() != null) {
+                    if (opts.listOnly() && opts.target().indexOf('*') >= 0) {
+                        declarations.searchSymbols(listing, new SymbolSelection(opts.target(), null), out);
+                    } else if (opts.source() != null) {
                         declarations.searchSourceContexts(listing, out);
                     } else {
                         declarations.searchSymbols(listing, new SymbolSelection(opts.target(), null), out);

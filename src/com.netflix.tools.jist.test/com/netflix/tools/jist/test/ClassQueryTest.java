@@ -1833,6 +1833,38 @@ class ClassQueryTest {
     }
 
     @Test
+    void jsonListOutputIncludesDeclarationSourceRange() throws Exception {
+        var result = run(
+                "--system", "none",
+                "--class-path", ROOT.resolve("classes").toString(),
+                "--source-path", ROOT.resolve("src").toString(),
+                "-l", "--source", "none", "--format", "json", "*Example*");
+
+        assertEquals(0, result.exitCode(), result.error());
+        var results = Json.parse(result.output()).get("results").asList();
+        assertEquals(1, results.size(), result.output());
+        assertTrue(results.getFirst().tryGet("source").isPresent(), result.output());
+        var source = results.getFirst().get("source");
+        assertEquals(SOURCE.toAbsolutePath().normalize().toString(), source.get("location").asString());
+        assertEquals(Files.readAllLines(SOURCE).size(), source.get("lineCount").asInt());
+        var range = source.get("range");
+        assertEquals(4, range.get("startLine").asInt());
+        assertEquals(15, range.get("endLine").asInt());
+
+        var methodResult = run(
+                "--system", "none",
+                "--class-path", ROOT.resolve("classes").toString(),
+                "--source-path", ROOT.resolve("src").toString(),
+                "-l", "--source", "none", "--kind", "method", "--format", "json", "*Example.run*");
+        assertEquals(0, methodResult.exitCode(), methodResult.error());
+        var methods = Json.parse(methodResult.output()).get("results").asList();
+        assertEquals(1, methods.size(), methodResult.output());
+        var methodRange = methods.getFirst().get("source").get("range");
+        assertEquals(8, methodRange.get("startLine").asInt());
+        assertEquals(10, methodRange.get("endLine").asInt());
+    }
+
+    @Test
     void jsonOutputStreamsStructuredOrigins() {
         var result = run("--system", "none", "--class-path", JAR.toString(), "--source",
                 "none", "--format", "json", "com.example.Example.run");

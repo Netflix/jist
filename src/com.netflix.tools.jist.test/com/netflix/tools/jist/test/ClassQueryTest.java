@@ -610,6 +610,15 @@ class ClassQueryTest {
                 "--kind",
                 "method",
                 "*run*");
+        var sourceTypes = run(
+                "--system",
+                "none",
+                "--source-path",
+                ROOT.resolve("src").toString(),
+                "--source",
+                "none",
+                "-l",
+                "*Outer*");
 
         assertEquals(0, types.exitCode(), types.error());
         assertEquals("class com.example.Example\n", types.output());
@@ -617,6 +626,9 @@ class ClassQueryTest {
         assertTrue(methods.output().contains("method com.example.Example.run(int)"), methods.output());
         assertTrue(methods.output().contains("method com.example.Overloads.run()"), methods.output());
         assertFalse(methods.output().contains("com.example.Example.internal()"), methods.output());
+        assertEquals(0, sourceTypes.exitCode(), sourceTypes.error());
+        assertTrue(sourceTypes.output().contains("class com.example.Outer"), sourceTypes.output());
+        assertFalse(sourceTypes.output().contains("package com.example.Outer"), sourceTypes.output());
     }
 
     @Test

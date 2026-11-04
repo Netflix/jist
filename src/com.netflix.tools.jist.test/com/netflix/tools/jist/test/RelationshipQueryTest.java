@@ -88,6 +88,51 @@ class RelationshipQueryTest {
     }
 
     @Test
+    void compiledRelationshipSearchIgnoresUnrelatedMissingDependencies(@TempDir Path directory) throws Exception {
+        var sources = Files.createDirectories(directory.resolve("src"));
+        var classes = Files.createDirectories(directory.resolve("classes"));
+        var root = sources.resolve("example/Root.java");
+        var child = sources.resolve("example/Child.java");
+        var dependency = sources.resolve("missing/Dependency.java");
+        var annotation = sources.resolve("broken/TypeUse.java");
+        var unrelated = sources.resolve("broken/Unrelated.java");
+        Files.createDirectories(root.getParent());
+        Files.createDirectories(dependency.getParent());
+        Files.createDirectories(unrelated.getParent());
+        Files.writeString(root, "package example; public interface Root { void run(); }");
+        Files.writeString(child, "package example; public class Child implements Root { public void run() {} }");
+        Files.writeString(dependency, "package missing; public class Dependency {}");
+        Files.writeString(annotation, "package broken; @java.lang.annotation.Target(java.lang.annotation.ElementType.TYPE_USE) public @interface TypeUse {}");
+        Files.writeString(unrelated, "package broken; public class Unrelated<C extends missing.Dependency> { public static <T extends missing.Dependency> @TypeUse T run() { return null; } }");
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null, List.of("-d", classes.toString()), null,
+                    manager.getJavaFileObjects(root, child, dependency, annotation, unrelated)).call());
+        }
+        Files.delete(classes.resolve("missing/Dependency.class"));
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        int code = new Jist().run(new PrintWriter(output), new PrintWriter(error),
+                "--class-path", classes.toString(), "--limit-modules", "java.base", "-l",
+                "--subtypes", "example.Root");
+
+        assertEquals(0, code, error.toString());
+        assertEquals("class example.Child\n", output.toString());
+        assertEquals("", error.toString());
+
+        output = new StringWriter();
+        error = new StringWriter();
+        code = new Jist().run(new PrintWriter(output), new PrintWriter(error),
+                "--class-path", classes.toString(), "--limit-modules", "java.base", "-l",
+                "--overrides", "example.Root.run");
+
+        assertEquals(0, code, error.toString());
+        assertEquals("method example.Child.run()\n", output.toString());
+        assertEquals("", error.toString());
+    }
+
+    @Test
     void unionsRepeatedAndMixedSelectionsWithoutDuplicates() {
         var result = run("--subtypes", "example.Root", "--subtypes", "example.Base", "--supertypes", "example.Leaf",
                 "--supertypes", "example.Leaf");

@@ -33,6 +33,8 @@ final class RelationshipSearch implements Closeable {
     private final List<TypeElement> subtypes = new ArrayList<>();
     private final Set<String> supertypes = new HashSet<>();
     private final List<ExecutableElement> overrides = new ArrayList<>();
+    private Set<String> compiledSubtypes = Set.of();
+    private Set<String> compiledOverrideOwners = Set.of();
 
     private RelationshipSearch(JavaAnalysis analysis, boolean direct) {
         this.analysis = analysis;
@@ -70,6 +72,22 @@ final class RelationshipSearch implements Closeable {
                     throw new ToolException(1, "No overridable method: " + name);
                 }
             }
+            if (!search.subtypes.isEmpty() || !search.overrides.isEmpty()) {
+                var hierarchy = ClassHierarchy.read(options, environment);
+                if (!search.subtypes.isEmpty()) {
+                    var targets = search.subtypes.stream()
+                            .map(type -> type.getQualifiedName().toString())
+                            .collect(Collectors.toUnmodifiableSet());
+                    search.compiledSubtypes = hierarchy.subtypes(targets, options.direct());
+                }
+                if (!search.overrides.isEmpty()) {
+                    var owners = search.overrides.stream()
+                            .map(method -> (TypeElement) method.getEnclosingElement())
+                            .map(type -> type.getQualifiedName().toString())
+                            .collect(Collectors.toUnmodifiableSet());
+                    search.compiledOverrideOwners = hierarchy.overrideOwners(owners);
+                }
+            }
             analysis.checkDiagnostics();
             return search;
         } catch (IOException | ToolException | RuntimeException | Error e) {
@@ -90,13 +108,17 @@ final class RelationshipSearch implements Closeable {
         analysis.readSourceUnit(name);
     }
 
-    boolean matches(String key, SymbolKind kind) throws ToolException {
-        boolean result = matchesDeclaration(key, kind);
+    boolean mayMatchCompiledClass(String name) {
+        return compiledSubtypes.contains(name) || compiledOverrideOwners.contains(name) || supertypes.contains(name);
+    }
+
+    boolean matches(String key, SymbolKind kind, boolean compiled) throws ToolException {
+        boolean result = matchesDeclaration(key, kind, compiled);
         analysis.checkDiagnostics();
         return result;
     }
 
-    private boolean matchesDeclaration(String key, SymbolKind kind) {
+    private boolean matchesDeclaration(String key, SymbolKind kind, boolean compiled) {
         int member = key.indexOf('#');
         if (member < 0) {
             if (kind == SymbolKind.MODULE || kind == SymbolKind.PACKAGE) {
@@ -104,6 +126,9 @@ final class RelationshipSearch implements Closeable {
             }
             if (supertypes.contains(key)) {
                 return true;
+            }
+            if (compiled) {
+                return compiledSubtypes.contains(key);
             }
             if (subtypes.isEmpty()) {
                 return false;
@@ -127,7 +152,11 @@ final class RelationshipSearch implements Closeable {
         if (overrides.stream().noneMatch(target -> target.getSimpleName().contentEquals(name))) {
             return false;
         }
-        var owner = elements.getTypeElement(key.substring(0, member));
+        var ownerName = key.substring(0, member);
+        if (compiled && !compiledOverrideOwners.contains(ownerName)) {
+            return false;
+        }
+        var owner = elements.getTypeElement(ownerName);
         if (owner == null) {
             return false;
         }

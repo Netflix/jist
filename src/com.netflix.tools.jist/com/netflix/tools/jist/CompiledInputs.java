@@ -81,7 +81,7 @@ final class CompiledInputs {
         }
     }
 
-    private static void scanEntry(Path path, Reader reader, Consumer consumer, Filter filter) throws IOException, ToolException {
+    static void scanEntry(Path path, Reader reader, Consumer consumer, Filter filter) throws IOException, ToolException {
         if (Files.isDirectory(path)) {
             try (var files = Files.walk(path)) {
                 var iterator = files.filter(Files::isRegularFile)

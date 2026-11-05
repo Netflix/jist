@@ -24,12 +24,12 @@ import static com.netflix.tools.jist.SearchEnvironment.unitLocation;
 final class CompiledInputs {
     @FunctionalInterface
     interface Reader {
-        byte[] read(InputStream input) throws IOException;
+        byte[] read(InputStream input, long size) throws IOException;
     }
 
     @FunctionalInterface
     interface Consumer {
-        void accept(byte[] bytes, String location) throws IOException, ToolException;
+        void accept(byte[] bytes, Supplier<String> location) throws IOException, ToolException;
     }
 
     @FunctionalInterface
@@ -81,6 +81,18 @@ final class CompiledInputs {
         }
     }
 
+    static byte[] readAllBytes(InputStream input, long size) throws IOException {
+        if (size < 0 || size > Integer.MAX_VALUE) {
+            return input.readAllBytes();
+        }
+        var bytes = new byte[(int) size];
+        int read = input.readNBytes(bytes, 0, bytes.length);
+        if (read != bytes.length) {
+            throw new EOFException("Expected " + bytes.length + " bytes, read " + read);
+        }
+        return bytes;
+    }
+
     static void scanEntry(Path path, Reader reader, Consumer consumer, Filter filter) throws IOException, ToolException {
         if (Files.isDirectory(path)) {
             try (var files = Files.walk(path)) {
@@ -93,9 +105,9 @@ final class CompiledInputs {
                         continue;
                     }
                     try (var input = Files.newInputStream(file)) {
-                        var bytes = reader.read(input);
+                        var bytes = reader.read(input, Files.size(file));
                         if (bytes != null) {
-                            consumer.accept(bytes, unitLocation(file));
+                            consumer.accept(bytes, () -> unitLocation(file));
                         }
                     }
                 }
@@ -111,9 +123,9 @@ final class CompiledInputs {
                         continue;
                     }
                     try (var input = jar.getInputStream(entry)) {
-                        var bytes = reader.read(input);
+                        var bytes = reader.read(input, entry.getSize());
                         if (bytes != null) {
-                            consumer.accept(bytes, "jar:" + path.toAbsolutePath().normalize().toUri() + "!/" + entry.getRealName());
+                            consumer.accept(bytes, () -> "jar:" + path.toAbsolutePath().normalize().toUri() + "!/" + entry.getRealName());
                         }
                     }
                 }

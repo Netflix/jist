@@ -127,8 +127,8 @@ final class UsageSearch {
             var classReader = new UsageClassReader(target);
             out.sourceAttributor(location -> attributeAttachedSourceUnit(location, opts, target, out));
             try {
-                CompiledInputs.scan(opts, environment, classReader::read,
-                        (bytes, location) -> scanCompiledUsageClass(bytes, location, target, sources, out));
+                CompiledInputs.scan(opts, environment, (input, _) -> classReader.read(input),
+                        (bytes, location) -> scanCompiledUsageClass(bytes, location.get(), target, sources, out));
             } finally {
                 out.sourceAttributor(null);
             }

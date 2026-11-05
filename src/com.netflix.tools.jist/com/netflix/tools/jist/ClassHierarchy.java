@@ -114,7 +114,7 @@ final class ClassHierarchy {
                     try {
                         CompiledInputs.scanEntry(
                                 input.path(),
-                                InputStream::readAllBytes,
+                                CompiledInputs::readAllBytes,
                                 (bytes, _) -> add(inputOrder, CLASS_FILE.parse(bytes)),
                                 input.filter());
                     } finally {

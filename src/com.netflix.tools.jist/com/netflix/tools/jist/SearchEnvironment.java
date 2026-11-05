@@ -32,6 +32,7 @@ final class SearchEnvironment {
     private static final Map<Path, Map<String, java.lang.module.ModuleReference>> SYSTEM_MODULES = new java.util.concurrent.ConcurrentHashMap<>();
 
     private final Options options;
+    private final Set<Path> excludedPaths;
     private ModuleResolution resolvedModules;
     private Map<String, List<Path>> parsedPatches;
     private List<ModuleSourceInput> resolvedSourceInputs;
@@ -40,6 +41,27 @@ final class SearchEnvironment {
 
     SearchEnvironment(Options options) {
         this.options = options;
+        excludedPaths = options.excludePath() == null ? Set.of()
+                : Arrays.stream(options.excludePath().split(java.util.regex.Pattern.quote(File.pathSeparator), -1))
+                        .map(Path::of)
+                        .map(path -> path.toAbsolutePath().normalize())
+                        .collect(Collectors.toUnmodifiableSet());
+    }
+
+    boolean searches(Path path) {
+        return excludedPaths.isEmpty() || !excludedPaths.contains(path.toAbsolutePath().normalize());
+    }
+
+    boolean searches(ModuleInput module) {
+        if (excludedPaths.isEmpty()) {
+            return true;
+        }
+        if (!searches(module.location())) {
+            return false;
+        }
+        var parent = module.location().toAbsolutePath().normalize().getParent();
+        return Stream.concat(parsePathList(options.modulePath()).stream(), parsePathList(options.upgradeModulePath()).stream())
+                .noneMatch(root -> !searches(root) && root.toAbsolutePath().normalize().equals(parent));
     }
 
     ModuleResolution modules() throws IOException, ToolException {
@@ -1202,30 +1224,6 @@ final class SearchEnvironment {
             }
         }
         return result;
-    }
-
-    static SourcePaths expandSourcePaths(String sourcePath) {
-        if (sourcePath == null)
-            return new SourcePaths(List.of(), List.of());
-        var paths = new ArrayList<Path>();
-        var opened = new ArrayList<FileSystem>();
-        for (var part : sourcePath.split(File.pathSeparator)) {
-            var p = Path.of(part);
-            if ((p.toString().endsWith(".jar")
-                            || p.toString().endsWith(".zip"))
-                    && Files.isRegularFile(p)) {
-                try {
-                    var fs = FileSystems.newFileSystem(p);
-                    opened.add(fs);
-                    paths.add(fs.getPath("/"));
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            } else {
-                paths.add(p);
-            }
-        }
-        return new SourcePaths(List.copyOf(paths), List.copyOf(opened));
     }
 
     static String jrtModuleName(String location) {

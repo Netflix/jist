@@ -88,6 +88,173 @@ class RelationshipQueryTest {
     }
 
     @Test
+    void compiledRelationshipSearchIgnoresUnrelatedMissingDependencies(@TempDir Path directory) throws Exception {
+        var sources = Files.createDirectories(directory.resolve("src"));
+        var classes = Files.createDirectories(directory.resolve("classes"));
+        var root = sources.resolve("example/Root.java");
+        var child = sources.resolve("example/Child.java");
+        var dependency = sources.resolve("missing/Dependency.java");
+        var annotation = sources.resolve("broken/TypeUse.java");
+        var unrelated = sources.resolve("broken/Unrelated.java");
+        Files.createDirectories(root.getParent());
+        Files.createDirectories(dependency.getParent());
+        Files.createDirectories(unrelated.getParent());
+        Files.writeString(root, "package example; public interface Root { void run(); }");
+        Files.writeString(child, "package example; public class Child implements Root { public void run() {} }");
+        Files.writeString(dependency, "package missing; public class Dependency {}");
+        Files.writeString(annotation, "package broken; @java.lang.annotation.Target(java.lang.annotation.ElementType.TYPE_USE) public @interface TypeUse {}");
+        Files.writeString(unrelated, "package broken; public class Unrelated<C extends missing.Dependency> { public static <T extends missing.Dependency> @TypeUse T run() { return null; } }");
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null, List.of("-d", classes.toString()), null,
+                    manager.getJavaFileObjects(root, child, dependency, annotation, unrelated)).call());
+        }
+        Files.delete(classes.resolve("missing/Dependency.class"));
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        int code = new Jist().run(new PrintWriter(output), new PrintWriter(error),
+                "--class-path", classes.toString(), "--limit-modules", "java.base", "-l",
+                "--subtypes", "example.Root");
+
+        assertEquals(0, code, error.toString());
+        assertEquals("class example.Child\n", output.toString());
+        assertEquals("", error.toString());
+
+        output = new StringWriter();
+        error = new StringWriter();
+        code = new Jist().run(new PrintWriter(output), new PrintWriter(error),
+                "--class-path", classes.toString(), "--limit-modules", "java.base", "-l",
+                "--overrides", "example.Root.run");
+
+        assertEquals(0, code, error.toString());
+        assertEquals("method example.Child.run()\n", output.toString());
+        assertEquals("", error.toString());
+    }
+
+    @Test
+    void compiledSubtypeTargetsUseSearchedClassFilesRatherThanReleaseSignatures(@TempDir Path directory) throws Exception {
+        var source = directory.resolve("Item.java");
+        var classes = directory.resolve("classes");
+        Files.writeString(source, "package example; public record Item(int value) {}");
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null, List.of("-d", classes.toString()), null,
+                    manager.getJavaFileObjects(source)).call());
+        }
+
+        var result = run("--class-path", classes.toString(), "--exclude-system-modules", "--release", "11",
+                "--subtypes", "java.lang.Record");
+
+        assertSuccess(result);
+        assertEquals("record example.Item\n", result.output());
+    }
+
+    @Test
+    void findsSubtypesOfCompiledNestedTargets(@TempDir Path directory) throws Exception {
+        var source = directory.resolve("Holder.java");
+        var classes = directory.resolve("classes");
+        Files.writeString(source, "package example; public class Holder { public interface Root {} public static class Child implements Root {} }");
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null, List.of("-d", classes.toString()), null,
+                    manager.getJavaFileObjects(source)).call());
+        }
+
+        var result = run("--class-path", classes.toString(), "--exclude-system-modules", "--subtypes", "example.Holder.Root");
+
+        assertSuccess(result);
+        assertEquals("class example.Holder.Child\n", result.output());
+    }
+
+    @Test
+    void excludedPathsRemainAvailableForHierarchyResolution(@TempDir Path directory) throws Exception {
+        var parents = directory.resolve("parents");
+        var candidates = directory.resolve("candidates");
+        Files.createDirectories(parents.resolve("example"));
+        Files.createDirectories(candidates.resolve("example"));
+        try (var files = Files.list(CLASSES.resolve("example"))) {
+            for (var file : files.toList()) {
+                var root = List.of("Leaf.class", "Other.class", "Unrelated.class").contains(file.getFileName().toString())
+                        ? candidates : parents;
+                Files.copy(file, root.resolve("example").resolve(file.getFileName()));
+            }
+        }
+        var archive = directory.resolve("parents.jar");
+        writeJar(archive, parents);
+        for (var parentPath : List.of(parents, archive)) {
+            var options = List.of("--class-path", parentPath + File.pathSeparator + candidates,
+                    "--exclude-path", parentPath.resolveSibling("unused") + File.pathSeparator + parentPath,
+                    "--exclude-system-modules");
+            var types = new ArrayList<>(options);
+            types.addAll(List.of("--subtypes", "example.Root"));
+            var result = run(types.toArray(String[]::new));
+            assertSuccess(result);
+            assertEquals("class example.Leaf\nclass example.Other\n", result.output());
+            var methods = new ArrayList<>(options);
+            methods.addAll(List.of("--overrides", "example.Root.run"));
+            var overrides = run(methods.toArray(String[]::new));
+            assertSuccess(overrides);
+            assertEquals(4, overrides.output().lines().count(), overrides.output());
+        }
+    }
+
+    @Test
+    void excludedMultiReleaseAncestorsUseTheSearchedRuntimeVersion(@TempDir Path directory) throws Exception {
+        var ancestor = directory.resolve("src/example/Ancestor.java");
+        var child = directory.resolve("src/example/Child.java");
+        var base = directory.resolve("base");
+        var versioned = directory.resolve("versioned");
+        var candidates = directory.resolve("candidates");
+        Files.createDirectories(ancestor.getParent());
+        Files.writeString(ancestor, "package example; public abstract class Ancestor {}");
+        Files.writeString(child, "package example; public abstract class Child extends Ancestor {}");
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null, List.of("-d", base.toString()), null,
+                    manager.getJavaFileObjects(ancestor)).call());
+        }
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null, List.of("-d", candidates.toString(), "--class-path", base.toString()), null,
+                    manager.getJavaFileObjects(child)).call());
+        }
+        Files.writeString(ancestor, "package example; public abstract class Ancestor extends Base {}");
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null, List.of("-d", versioned.toString(), "--class-path", CLASSES.toString()), null,
+                    manager.getJavaFileObjects(ancestor)).call());
+        }
+        var archive = directory.resolve("ancestors.jar");
+        var manifest = new java.util.jar.Manifest();
+        manifest.getMainAttributes().putValue("Manifest-Version", "1.0");
+        manifest.getMainAttributes().putValue("Multi-Release", "true");
+        try (var jar = new JarOutputStream(Files.newOutputStream(archive), manifest)) {
+            jar.putNextEntry(new JarEntry("example/Ancestor.class"));
+            Files.copy(base.resolve("example/Ancestor.class"), jar);
+            jar.closeEntry();
+            jar.putNextEntry(new JarEntry("META-INF/versions/" + Runtime.version().feature() + "/example/Ancestor.class"));
+            Files.copy(versioned.resolve("example/Ancestor.class"), jar);
+            jar.closeEntry();
+        }
+        var result = run("--class-path", CLASSES + File.pathSeparator + archive + File.pathSeparator + candidates,
+                "--exclude-path", CLASSES + File.pathSeparator + archive, "--exclude-system-modules",
+                "--release", Integer.toString(Runtime.version().feature() - 1), "--subtypes", "example.Root");
+        assertSuccess(result);
+        assertEquals("class example.Child\n", result.output());
+    }
+
+    @Test
+    void excludedSourceRootsRemainAvailableForAttribution(@TempDir Path source) throws Exception {
+        var directory = Files.createDirectories(source.resolve("example"));
+        Files.writeString(directory.resolve("NewLeaf.java"),
+                "package example; public class NewLeaf extends Leaf { public void run(String value) {} }");
+        var result = run("--class-path", ROOT.resolve("empty").toString(),
+                "--source-path", SOURCES + File.pathSeparator + source,
+                "--exclude-path", SOURCES.toString(), "--subtypes", "example.Root");
+        assertSuccess(result);
+        assertEquals("class example.NewLeaf\n", result.output());
+    }
+
+    @Test
     void unionsRepeatedAndMixedSelectionsWithoutDuplicates() {
         var result = run("--subtypes", "example.Root", "--subtypes", "example.Base", "--supertypes", "example.Leaf",
                 "--supertypes", "example.Leaf");
@@ -311,6 +478,69 @@ class RelationshipQueryTest {
                 override.output());
         assertTrue(override.output().contains("example.Leaf.run(String)"),
                 override.output());
+    }
+
+    @Test
+    void compiledDescendantsFollowCurrentSourceAncestors(@TempDir Path directory) throws Exception {
+        var source = Files.createDirectories(directory.resolve("src/example"));
+        Files.writeString(source.resolve("Base.java"), """
+                package example;
+                public abstract class Base extends Unrelated {
+                    public abstract void run(String value);
+                    public void run(int value) {}
+                }
+                """);
+        var candidates = Files.createDirectories(directory.resolve("classes/example"));
+        for (var name : List.of("Inherited.class", "Leaf.class")) {
+            Files.copy(CLASSES.resolve("example").resolve(name), candidates.resolve(name));
+        }
+        for (boolean excludeAncestors : List.of(false, true)) {
+            var options = new ArrayList<>(List.of("--class-path", CLASSES + File.pathSeparator + candidates.getParent(),
+                    "--source-path", source.getParent().toString(), "--exclude-system-modules"));
+            if (excludeAncestors) {
+                options.addAll(List.of("--exclude-path", CLASSES.toString()));
+            }
+            var types = new ArrayList<>(options);
+            types.addAll(List.of("--subtypes", "example.Unrelated"));
+            var subtypes = run(types.toArray(String[]::new));
+            assertSuccess(subtypes);
+            assertEquals(List.of("class example.Base", "class example.Inherited", "class example.Leaf"),
+                    subtypes.output().lines().sorted().toList());
+
+            var methods = new ArrayList<>(options);
+            methods.addAll(List.of("--overrides", "example.Unrelated.run"));
+            var overrides = run(methods.toArray(String[]::new));
+            assertSuccess(overrides);
+            assertEquals(List.of("method example.Base.run(String)", "method example.Leaf.run(java.lang.String)"),
+                    overrides.output().lines().sorted().toList());
+        }
+    }
+
+    @Test
+    void compiledDescendantsFollowSecondarySourceAncestors(@TempDir Path directory) throws Exception {
+        var source = Files.createDirectories(directory.resolve("src/example"));
+        var file = source.resolve("Updated.java");
+        var classes = directory.resolve("classes");
+        Files.writeString(file, "package example; public class Updated {} abstract class Base implements Branch { public abstract void run(String value); public void run(int value) {} }");
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null,
+                    List.of("-d", classes.toString(), "--class-path", CLASSES.toString()), null,
+                    manager.getJavaFileObjects(file)).call());
+        }
+        Files.writeString(file, """
+                package example;
+                public class Updated {}
+                abstract class Base extends Unrelated {
+                    public abstract void run(String value);
+                    public void run(int value) {}
+                }
+                """);
+        var result = run("--class-path", classes + File.pathSeparator + CLASSES,
+                "--source-path", source.getParent().toString(), "--exclude-system-modules", "--subtypes", "example.Unrelated");
+        assertSuccess(result);
+        assertEquals(List.of("class example.Base", "class example.Inherited", "class example.Leaf"),
+                result.output().lines().sorted().toList());
     }
 
     @Test

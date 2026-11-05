@@ -252,6 +252,48 @@ class CallQueryTest {
     }
 
     @Test
+    void largeCompiledInputsPreserveCallEdgesAndOrigins(@TempDir Path directory) throws Exception {
+        var source = directory.resolve("LargeCaller.java");
+        var classes = Files.createDirectories(directory.resolve("classes"));
+        Files.writeString(source, """
+                package example;
+                public class LargeCaller {
+                    public static final String PADDING = "%s";
+                    public static void target() {}
+                    public void run() { target(); }
+                }
+                """.formatted("x".repeat(20_000)));
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null, List.of("-g", "-d", classes.toString()), null,
+                    manager.getJavaFileObjects(source)).call());
+        }
+        var classFile = classes.resolve("example/LargeCaller.class");
+        assertTrue(Files.size(classFile) > 20_000);
+        var archive = directory.resolve("classes.jar");
+        try (var jar = new java.util.jar.JarOutputStream(Files.newOutputStream(archive))) {
+            jar.putNextEntry(new java.util.jar.JarEntry("example/LargeCaller.class"));
+            Files.copy(classFile, jar);
+            jar.closeEntry();
+        }
+        for (var input : List.of(classes, archive)) {
+            var result = invoke(List.of(
+                    "--limit-modules", "java.base", "--exclude-system-modules",
+                    "--class-path", input.toString(), "--source", "none", "--format", "json",
+                    "--callers", "example.LargeCaller.target"));
+            assertSuccess(result);
+            var rows = Json.parse(result.output()).get("results").asList();
+            assertEquals(1, rows.size(), result.output());
+            var row = rows.getFirst();
+            assertTrue(row.get("text").asString().contains(
+                    "example.LargeCaller.run() -> example.LargeCaller.target()"), result.output());
+            var origin = input.equals(classes) ? classFile.toString()
+                    : "jar:" + archive.toUri() + "!/example/LargeCaller.class";
+            assertEquals(origin, row.get("origin").get("location").asString());
+        }
+    }
+
+    @Test
     void listOnlyReturnsMatchingExecutableDeclarationsOnce() {
         for (boolean source : List.of(false, true)) {
             var callers = run(source, "--callers", "example.Target.touch", "--visibility", "all", "-l");

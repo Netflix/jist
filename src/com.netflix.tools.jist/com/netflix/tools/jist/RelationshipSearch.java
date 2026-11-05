@@ -27,28 +27,43 @@ import javax.lang.model.util.Elements;
 
 /** Matches declaration relationships in one compilation context. */
 final class RelationshipSearch implements Closeable {
-    private final JavaAnalysis analysis;
-    private final Elements elements;
+    private final Options options;
+    private final SearchEnvironment environment;
     private final boolean direct;
-    private final List<TypeElement> subtypes = new ArrayList<>();
+    private JavaAnalysis analysis;
+    private Elements elements;
+    private final Set<String> subtypes = new HashSet<>();
     private final Set<String> supertypes = new HashSet<>();
     private final List<ExecutableElement> overrides = new ArrayList<>();
+    private Set<String> compiledSubtypes = Set.of();
+    private Set<String> compiledOverrideOwners = Set.of();
+    private Set<String> sourceAffected = Set.of();
 
-    private RelationshipSearch(JavaAnalysis analysis, boolean direct) {
-        this.analysis = analysis;
-        this.elements = analysis.elements();
-        this.direct = direct;
+    private RelationshipSearch(Options options, SearchEnvironment environment) {
+        this.options = options;
+        this.environment = environment;
+        this.direct = options.direct();
+    }
+
+    private JavaAnalysis analysis() throws IOException, ToolException {
+        if (analysis == null) {
+            analysis = JavaAnalysis.open(options, environment, List.of());
+            elements = analysis.elements();
+        }
+        return analysis;
     }
 
     static RelationshipSearch open(Options options, SearchEnvironment environment) throws IOException, ToolException {
-        var analysis = JavaAnalysis.open(options, environment, List.of());
+        var search = new RelationshipSearch(options, environment);
         try {
-            var search = new RelationshipSearch(analysis, options.direct());
             for (var name : options.subtypes()) {
-                search.subtypes.add(analysis.resolveType(name));
+                if (!environment.classTargetExists(name)) {
+                    throw new ToolException(1, "Type not found: " + name);
+                }
+                search.subtypes.add(name);
             }
             for (var name : options.supertypes()) {
-                search.parents(analysis.resolveType(name), search.supertypes, !options.direct());
+                search.parents(search.analysis().resolveType(name), search.supertypes, !options.direct());
             }
             for (var name : options.overrides()) {
                 boolean found = false;
@@ -56,7 +71,7 @@ final class RelationshipSearch implements Closeable {
                     if (selection.member() == null) {
                         continue;
                     }
-                    var type = analysis.resolveType(selection.path());
+                    var type = search.analysis().resolveType(selection.path());
                     var methods = search.elements.getAllMembers(type).stream()
                             .filter(element -> element.getKind() == ElementKind.METHOD)
                             .map(ExecutableElement.class::cast)
@@ -70,10 +85,32 @@ final class RelationshipSearch implements Closeable {
                     throw new ToolException(1, "No overridable method: " + name);
                 }
             }
-            analysis.checkDiagnostics();
+            if (!search.subtypes.isEmpty() || !search.overrides.isEmpty()) {
+                try (var hierarchy = ClassHierarchy.read(options, environment)) {
+                    search.sourceAffected = hierarchy.sourceAffected();
+                    if (!search.sourceAffected.isEmpty()) {
+                        for (var source : hierarchy.sourceFiles().stream().sorted().toList()) {
+                            search.analysis().readSourceFile(source);
+                        }
+                    }
+                    if (!search.subtypes.isEmpty()) {
+                        search.compiledSubtypes = hierarchy.subtypes(search.subtypes, options.direct());
+                    }
+                    if (!search.overrides.isEmpty()) {
+                        var owners = search.overrides.stream()
+                                .map(method -> (TypeElement) method.getEnclosingElement())
+                                .map(type -> type.getQualifiedName().toString())
+                                .collect(Collectors.toUnmodifiableSet());
+                        search.compiledOverrideOwners = hierarchy.overrideOwners(owners);
+                    }
+                }
+            }
+            if (search.analysis != null) {
+                search.analysis.checkDiagnostics();
+            }
             return search;
         } catch (IOException | ToolException | RuntimeException | Error e) {
-            analysis.close();
+            search.close();
             throw e;
         }
     }
@@ -86,17 +123,24 @@ final class RelationshipSearch implements Closeable {
         return supertypes.stream().sorted().toList();
     }
 
-    void readSourceUnit(String name) throws ToolException {
-        analysis.readSourceUnit(name);
+    void readSourceUnit(String name) throws IOException, ToolException {
+        analysis().readSourceUnit(name);
     }
 
-    boolean matches(String key, SymbolKind kind) throws ToolException {
-        boolean result = matchesDeclaration(key, kind);
-        analysis.checkDiagnostics();
+    boolean mayMatchCompiledClass(String name) {
+        return compiledSubtypes.contains(name) || compiledOverrideOwners.contains(name) || supertypes.contains(name)
+                || sourceAffected.contains(name);
+    }
+
+    boolean matches(String key, SymbolKind kind, boolean compiled) throws IOException, ToolException {
+        boolean result = matchesDeclaration(key, kind, compiled);
+        if (analysis != null) {
+            analysis.checkDiagnostics();
+        }
         return result;
     }
 
-    private boolean matchesDeclaration(String key, SymbolKind kind) {
+    private boolean matchesDeclaration(String key, SymbolKind kind, boolean compiled) throws IOException, ToolException {
         int member = key.indexOf('#');
         if (member < 0) {
             if (kind == SymbolKind.MODULE || kind == SymbolKind.PACKAGE) {
@@ -105,16 +149,19 @@ final class RelationshipSearch implements Closeable {
             if (supertypes.contains(key)) {
                 return true;
             }
+            if (compiled && !sourceAffected.contains(key)) {
+                return compiledSubtypes.contains(key);
+            }
             if (subtypes.isEmpty()) {
                 return false;
             }
-            var candidate = elements.getTypeElement(key);
+            var candidate = analysis().elements().getTypeElement(key);
             if (candidate == null) {
                 return false;
             }
             var ancestors = new HashSet<String>();
             parents(candidate, ancestors, !direct);
-            return subtypes.stream().anyMatch(target -> ancestors.contains(target.getQualifiedName().toString()));
+            return subtypes.stream().anyMatch(ancestors::contains);
         }
         if (kind != SymbolKind.METHOD || overrides.isEmpty()) {
             return false;
@@ -127,7 +174,11 @@ final class RelationshipSearch implements Closeable {
         if (overrides.stream().noneMatch(target -> target.getSimpleName().contentEquals(name))) {
             return false;
         }
-        var owner = elements.getTypeElement(key.substring(0, member));
+        var ownerName = key.substring(0, member);
+        if (compiled && !compiledOverrideOwners.contains(ownerName) && !sourceAffected.contains(ownerName)) {
+            return false;
+        }
+        var owner = elements.getTypeElement(ownerName);
         if (owner == null) {
             return false;
         }
@@ -189,6 +240,8 @@ final class RelationshipSearch implements Closeable {
 
     @Override
     public void close() throws IOException {
-        analysis.close();
+        if (analysis != null) {
+            analysis.close();
+        }
     }
 }

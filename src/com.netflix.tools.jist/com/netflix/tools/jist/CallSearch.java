@@ -112,10 +112,11 @@ final class CallSearch implements Closeable {
     void search(PrintWriter out) throws IOException, ToolException {
         try (var sources = environment.sources()) {
             sources.prepareOrdinarySources();
-            CompiledInputs.scan(options, environment, InputStream::readAllBytes,
-                    (bytes, location) -> compiled(bytes, location, sources, out));
+            CompiledInputs.scan(options, environment, CompiledInputs::readAllBytes,
+                    (bytes, location) -> compiled(bytes, location.get(), sources, out));
             var candidates = new LinkedHashMap<URI, SourceCandidate>();
             for (var root : sources.explicitPaths()) {
+                if (!environment.searches(root)) continue;
                 try (var files = Files.walk(root)) {
                     var iterator = files.filter(path -> path.toString().endsWith(".java"))
                             .filter(path -> !path.getFileName().toString().equals("module-info.java")).iterator();

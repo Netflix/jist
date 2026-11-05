@@ -16,11 +16,67 @@ package com.netflix.tools.jist;
 
 import module java.base;
 
-record SourcePaths(List<Path> paths, List<FileSystem> openFileSystems) implements Closeable {
+final class SourcePaths implements Closeable {
+    private final List<Root> roots;
+
+    SourcePaths(List<Path> paths) {
+        roots = paths.stream().map(Root::new).toList();
+    }
+
+    List<Root> roots() {
+        return roots;
+    }
+
     @Override
     public void close() throws IOException {
-        for (var fs : openFileSystems) {
-            fs.close();
+        IOException failure = null;
+        for (var root : roots) {
+            try {
+                root.close();
+            } catch (IOException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    static final class Root implements Closeable {
+        private final Path location;
+        private Path path;
+        private FileSystem archive;
+
+        Root(Path location) {
+            this.location = location;
+        }
+
+        Path location() {
+            return location;
+        }
+
+        Path path() throws IOException {
+            if (path == null) {
+                var name = location.toString();
+                if ((name.endsWith(".jar") || name.endsWith(".zip")) && Files.isRegularFile(location)) {
+                    archive = FileSystems.newFileSystem(location);
+                    path = archive.getPath("/");
+                } else {
+                    path = location;
+                }
+            }
+            return path;
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (archive != null) {
+                archive.close();
+            }
         }
     }
 }

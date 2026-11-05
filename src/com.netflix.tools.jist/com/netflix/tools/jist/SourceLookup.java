@@ -19,7 +19,6 @@ import module java.base;
 import java.lang.classfile.Attributes;
 import java.lang.classfile.ClassModel;
 
-import static com.netflix.tools.jist.SearchEnvironment.expandSourcePaths;
 import static com.netflix.tools.jist.SearchEnvironment.jrtModuleName;
 import static com.netflix.tools.jist.SearchEnvironment.unitLocation;
 
@@ -32,12 +31,12 @@ final class SourceLookup implements Closeable {
     private final SourcePaths explicit;
     private final SourcePaths system;
     private final List<Path> ordinarySourceDirectories;
-    private final List<Path> descriptorPaths;
+    private final List<SourcePaths.Root> descriptorPaths;
     private final Map<String, SourceUnit> cache = new HashMap<>();
     private Map<String, Path> ordinarySources;
     private Set<String> ordinarySourcePackages;
 
-    private SourceLookup(SourcePaths explicit, SourcePaths system, List<Path> ordinarySourceDirectories, List<Path> descriptorPaths) {
+    private SourceLookup(SourcePaths explicit, SourcePaths system, List<Path> ordinarySourceDirectories, List<SourcePaths.Root> descriptorPaths) {
         this.explicit = explicit;
         this.system = system;
         this.ordinarySourceDirectories = ordinarySourceDirectories;
@@ -45,28 +44,10 @@ final class SourceLookup implements Closeable {
     }
 
     static SourceLookup open(List<Path> roots, Set<Path> patches, String system) {
-        var paths = new ArrayList<Path>();
-        var descriptors = new ArrayList<Path>();
-        var archives = new ArrayList<FileSystem>();
-        try {
-            for (var root : roots) {
-                var expanded = expandSourcePaths(root.toString());
-                paths.addAll(expanded.paths());
-                archives.addAll(expanded.openFileSystems());
-                if (!patches.contains(root)) descriptors.addAll(expanded.paths());
-            }
-            var ordinary = roots.stream().filter(Files::isDirectory).toList();
-            return new SourceLookup(new SourcePaths(List.copyOf(paths), List.copyOf(archives)), openSystemSources(system), ordinary, List.copyOf(descriptors));
-        } catch (RuntimeException | Error failure) {
-            for (var archive : archives) {
-                try {
-                    archive.close();
-                } catch (IOException suppressed) {
-                    failure.addSuppressed(suppressed);
-                }
-            }
-            throw failure;
-        }
+        var explicit = new SourcePaths(roots);
+        var descriptors = explicit.roots().stream().filter(root -> !patches.contains(root.location())).toList();
+        var ordinary = roots.stream().filter(Files::isDirectory).toList();
+        return new SourceLookup(explicit, systemSources(system), ordinary, descriptors);
     }
 
     List<Path> explicitPaths() {
@@ -151,25 +132,25 @@ final class SourceLookup implements Closeable {
         var classPrefix = jarEntryPrefix(classLocation, classResource);
         var source = classPrefix == null || classPrefix.isEmpty()
                 ? null
-                : find(explicit.paths(), classPrefix, relativePath);
+                : find(explicit.roots(), classPrefix, relativePath);
         if (source == null && classPrefix != null && !classPrefix.isEmpty()) {
-            source = findOneDirectoryBelow(explicit.paths(), classPrefix, relativePath);
+            source = findOneDirectoryBelow(explicit.roots(), classPrefix, relativePath);
         }
         if (source == null) {
-            source = find(explicit.paths(), relativePath);
+            source = find(explicit.roots(), relativePath);
         }
         if (source == null) {
-            source = findOneDirectoryBelow(explicit.paths(), "", relativePath);
+            source = findOneDirectoryBelow(explicit.roots(), "", relativePath);
         }
         var moduleName = jrtModuleName(classLocation);
         if (source == null && moduleName != null) {
-            source = find(explicit.paths(), moduleName + "/" + relativePath);
+            source = find(explicit.roots(), moduleName + "/" + relativePath);
         }
         if (source == null && moduleName != null) {
-            source = find(system.paths(), moduleName + "/" + relativePath);
+            source = find(system.roots(), moduleName + "/" + relativePath);
         }
         if (source == null) {
-            source = find(system.paths(), relativePath);
+            source = find(system.roots(), relativePath);
         }
         return source;
     }
@@ -189,11 +170,12 @@ final class SourceLookup implements Closeable {
     SourceUnit findModuleInfo(String moduleName, String classLocation) throws IOException {
         var source = find(descriptorPaths, moduleName + "/module-info.java");
         if (source == null) {
-            for (var root : descriptorPaths) {
+            for (var input : descriptorPaths) {
+                var root = input.path();
                 if (root.getFileName() != null && root.getFileName()
                         .toString()
                         .equals(moduleName)) {
-                    source = find(List.of(root), "module-info.java");
+                    source = read(root, "module-info.java");
                     if (source != null) {
                         break;
                     }
@@ -204,14 +186,14 @@ final class SourceLookup implements Closeable {
             source = find(descriptorPaths, "module-info.java");
         }
         if (source == null) {
-            source = find(system.paths(), moduleName + "/module-info.java");
+            source = find(system.roots(), moduleName + "/module-info.java");
         }
         return source;
     }
 
-    private SourceUnit find(List<Path> roots, String relativePath) throws IOException {
+    private SourceUnit find(List<SourcePaths.Root> roots, String relativePath) throws IOException {
         for (var root : roots) {
-            var source = read(root, relativePath);
+            var source = read(root.path(), relativePath);
             if (source != null) {
                 return source;
             }
@@ -219,9 +201,9 @@ final class SourceLookup implements Closeable {
         return null;
     }
 
-    private SourceUnit find(List<Path> roots, String prefix, String relativePath) throws IOException {
+    private SourceUnit find(List<SourcePaths.Root> roots, String prefix, String relativePath) throws IOException {
         for (var root : roots) {
-            var source = read(root.resolve(prefix), relativePath);
+            var source = read(root.path().resolve(prefix), relativePath);
             if (source != null) {
                 return source;
             }
@@ -229,8 +211,9 @@ final class SourceLookup implements Closeable {
         return null;
     }
 
-    private SourceUnit findOneDirectoryBelow(List<Path> roots, String prefix, String relativePath) throws IOException {
-        for (var root : roots) {
+    private SourceUnit findOneDirectoryBelow(List<SourcePaths.Root> roots, String prefix, String relativePath) throws IOException {
+        for (var input : roots) {
+            var root = input.path();
             if (!"jar".equals(root.getFileSystem()
                                   .provider()
                                   .getScheme())) {
@@ -275,17 +258,17 @@ final class SourceLookup implements Closeable {
         return candidate.startsWith(normalizedRoot) ? candidate : null;
     }
 
-    private static SourcePaths openSystemSources(String system) {
+    private static SourcePaths systemSources(String system) {
         if ("none".equals(system)) {
-            return new SourcePaths(List.of(), List.of());
+            return new SourcePaths(List.of());
         }
         var javaHome = system != null ? Path.of(system) : Path.of(System.getProperty("java.home"));
         for (var archive : List.of(javaHome.resolve("lib/src.zip"), javaHome.resolve("src.zip"))) {
             if (Files.isRegularFile(archive)) {
-                return expandSourcePaths(archive.toString());
+                return new SourcePaths(List.of(archive));
             }
         }
-        return new SourcePaths(List.of(), List.of());
+        return new SourcePaths(List.of());
     }
 
     @Override

@@ -38,7 +38,8 @@ final class ExecutableTargets extends PrintWriter implements Output.SymbolOutput
         }
         var targets = new ExecutableTargets(target);
         var declarationTarget = DeclarationSearch.simpleNameTarget(target) ? target : null;
-        new DeclarationSearch(environment).listClasses(options.executableTargetSearch(declarationTarget), targets);
+        var targetOptions = options.executableTargetSearch(declarationTarget);
+        new DeclarationSearch(new SearchEnvironment(targetOptions)).listClasses(targetOptions, targets);
         return List.copyOf(targets.values);
     }
 

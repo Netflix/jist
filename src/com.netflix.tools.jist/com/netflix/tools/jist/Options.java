@@ -31,6 +31,7 @@ public record Options(
         String system,
         boolean excludeApplicationClasses,
         boolean excludeSystemModules,
+        String excludePath,
         String release,
         String module,
         String addModules,
@@ -132,6 +133,7 @@ public record Options(
                 system,
                 false,
                 false,
+                null,
                 release,
                 module,
                 addModules,
@@ -171,6 +173,7 @@ public record Options(
                 system,
                 excludeApplicationClasses,
                 excludeSystemModules,
+                excludePath,
                 release,
                 module,
                 addModules,
@@ -210,6 +213,7 @@ public record Options(
                 system,
                 excludeApplicationClasses,
                 excludeSystemModules,
+                excludePath,
                 release,
                 module,
                 addModules,
@@ -284,6 +288,8 @@ public record Options(
                                                             private, or all
 
                 Search:
+                  --exclude-path <path>                   Exclude input paths from searches, not resolution
+                                                            (path-separator-delimited, as with --class-path)
                   -k, --kind <kind>                       Include symbols of this kind; repeatable
                                                             module, package, type, class, interface,
                                                             enum, record, annotation, method, or field

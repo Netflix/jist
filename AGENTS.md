@@ -16,6 +16,7 @@ Jist is a symbol search and semantic relationship tool for Java compilation cont
   name, or delimiter-bounded suffix. A type selects its declared methods and constructors, excluding
   inherited executables. Multiple matches form a union. Default output preserves each `caller ->
   callee` edge; `-l` intentionally lists only the matching executable symbols.
+- `--exclude-path` accepts a platform-path-separator-delimited list of input roots to omit from searches. Excluded inputs remain available for resolution and source attachment. Hierarchy searches resolve excluded ancestors on demand rather than bulk-scanning those roots.
 - One qualified prefix, exact usage symbol, source file, or ClassFile locator is accepted per
   invocation.
 - A target without a dot matches every symbol whose terminal simple name is exactly that target.

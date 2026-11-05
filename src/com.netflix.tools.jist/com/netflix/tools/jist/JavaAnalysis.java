@@ -133,9 +133,7 @@ final class JavaAnalysis implements Closeable {
         }
         var source = environment.resolveSourceFile(name);
         if (source != null) {
-            var fileName = source.getFileName().toString();
-            var structure = SourceModel.parse(Files.readAllBytes(source)).structure(fileName, Visibility.ALL, false);
-            readSourceUnit(DeclarationSearch.sourceUnitName(structure, fileName));
+            readSourceFile(source);
         }
         var type = elements().getTypeElement(name);
         checkDiagnostics();
@@ -143,6 +141,12 @@ final class JavaAnalysis implements Closeable {
             throw new ToolException(1, "Cannot resolve type: " + name);
         }
         return type;
+    }
+
+    void readSourceFile(Path source) throws IOException, ToolException {
+        var fileName = source.getFileName().toString();
+        var structure = SourceModel.parse(Files.readAllBytes(source)).structure(fileName, Visibility.ALL, false);
+        readSourceUnit(DeclarationSearch.sourceUnitName(structure, fileName));
     }
 
     void readSourceUnit(String name) throws ToolException {

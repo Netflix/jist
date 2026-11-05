@@ -36,6 +36,7 @@ final class JistCommandLine {
     private final ToolOption system = option("--system", "JDK|none", "System module location");
     private final ToolOption excludeApplicationClasses = flag("--exclude-application-classes", "Exclude application classes from searches");
     private final ToolOption excludeSystemModules = flag("--exclude-system-modules", "Exclude system modules from searches");
+    private final ToolOption excludePath = option("--exclude-path", "PATH", "Exclude input paths from searches, not resolution");
     private final ToolOption module = option("--module", "MODULE[,MODULE...]", "Selected compilation modules", "-m");
     private final ToolOption addModules = option("--add-modules", "MODULE[,MODULE...]", "Root modules");
     private final ToolOption addExports = option("--add-exports", "MODULE/PACKAGE=TARGET", "Add a module export");
@@ -104,6 +105,7 @@ final class JistCommandLine {
                     system,
                     excludeApplicationClasses,
                     excludeSystemModules,
+                    excludePath,
                     module,
                     addModules,
                     addExports,
@@ -273,6 +275,7 @@ final class JistCommandLine {
                 last(parsed, system),
                 parsed.contains(excludeApplicationClasses),
                 parsed.contains(excludeSystemModules),
+                last(parsed, excludePath),
                 last(parsed, release),
                 last(parsed, module),
                 merge(parsed.values(addModules)),

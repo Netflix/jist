@@ -268,6 +268,9 @@ final class DeclarationSearch {
                     }
                 }
                 for (var module : environment.moduleInputs()) {
+                    if (!environment.searches(module)) {
+                        continue;
+                    }
                     if (relationships == null
                             && module.descriptor().isAutomatic()
                             && (opts.kinds().isEmpty() || opts.listsModules())
@@ -330,6 +333,9 @@ final class DeclarationSearch {
             Set<String> emittedPackages,
             Map<String, EnumeratedSource> parsedSources)
             throws IOException, ToolException {
+        if (!environment.searches(entry)) {
+            return;
+        }
         if (Files.isDirectory(entry)) {
             walkFilesInDeclarationOrder(entry,
                     classFile -> {
@@ -339,7 +345,9 @@ final class DeclarationSearch {
                         var resourceName = entry.relativize(classFile)
                                                 .toString()
                                                 .replace(File.separatorChar, '/');
-                        if (!filter.test(resourceName) || !visibleClassResource(resourceName, moduleName, visiblePackages, opts)) {
+                        if (!filter.test(resourceName)
+                                || !visibleClassResource(resourceName, moduleName, visiblePackages, opts)
+                                || !mayMatchCompiledResource(resourceName)) {
                             return;
                         }
                         emitClassSourceContext(
@@ -362,7 +370,9 @@ final class DeclarationSearch {
                         + "!/";
                 while (iterator.hasNext()) {
                     var jarEntry = iterator.next();
-                    if (!filter.test(jarEntry.getName()) || !visibleClassResource(jarEntry.getName(), moduleName, visiblePackages, opts)) {
+                    if (!filter.test(jarEntry.getName())
+                            || !visibleClassResource(jarEntry.getName(), moduleName, visiblePackages, opts)
+                            || !mayMatchCompiledResource(jarEntry.getName())) {
                         continue;
                     }
                     if (opts.kinds().isEmpty() || opts.listsPackages()) {
@@ -389,6 +399,11 @@ final class DeclarationSearch {
                 }
             }
         }
+    }
+
+    private boolean mayMatchCompiledResource(String resourceName) {
+        var className = listedClassName(resourceName);
+        return relationships == null || className != null && relationships.mayMatchCompiledClass(className);
     }
 
     private static boolean visibleClassResource(String resourceName, String moduleName, Set<String> visiblePackages,
@@ -456,13 +471,10 @@ final class DeclarationSearch {
                         continue;
                     }
                     walkFilesInDeclarationOrder(module, classFile -> {
-                        if (!environment.includesSystemResource(module.getFileName().toString(),
-                                module.relativize(classFile).toString())
-                                || !visibleClassResource(
-                                module.relativize(classFile).toString(),
-                                module.getFileName().toString(),
-                                visiblePackages,
-                                opts)) {
+                        var resourceName = module.relativize(classFile).toString();
+                        if (!environment.includesSystemResource(module.getFileName().toString(), resourceName)
+                                || !visibleClassResource(resourceName, module.getFileName().toString(), visiblePackages, opts)
+                                || !mayMatchCompiledResource(resourceName)) {
                             return;
                         }
                         emitClassSourceContext(
@@ -541,9 +553,10 @@ final class DeclarationSearch {
             return;
         }
         var className = UsageSearch.displayClassName(model);
-        if (relationships != null && relationshipMatches(contextMatches(List.of(model), Map.of(), opts, visibility),
-                false)
-                .isEmpty()) {
+        if (relationships != null
+                && (!relationships.mayMatchCompiledClass(className)
+                        || relationshipMatches(contextMatches(List.of(model), Map.of(), opts, visibility), false, true)
+                                .isEmpty())) {
             return;
         }
         if (simpleNameTarget(opts.target()) && contextMatches(List.of(model), Map.of(), opts, visibility).isEmpty()) {
@@ -689,7 +702,7 @@ final class DeclarationSearch {
                     input.visiblePackages());
         }
         for (var root : sources.explicitPaths()) {
-            if (!Files.isDirectory(root)) {
+            if (!environment.searches(root) || !Files.isDirectory(root)) {
                 continue;
             }
             var normalizedRoot = root.toAbsolutePath().normalize();
@@ -934,6 +947,9 @@ final class DeclarationSearch {
             ExecutorService executor)
             throws IOException, ToolException {
         for (var entry : entries) {
+            if (!environment.searches(entry)) {
+                continue;
+            }
             if (Files.isDirectory(entry)) {
                 try (var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
                     walkFilesInDeclarationOrder(
@@ -993,6 +1009,9 @@ final class DeclarationSearch {
             throws IOException, ToolException {
         for (var module : environment.moduleInputs()) {
             var entry = module.location();
+            if (!environment.searches(module)) {
+                continue;
+            }
             if (module.descriptor().isAutomatic() && opts.listsModules() && matchesListedPrefix(opts, module.name())) {
                 if (!printListSymbol(out, SymbolKind.MODULE, module.name(), null)) {
                     out.println(module.name() + ": " + renderAutomaticModuleDeclaration(module.descriptor()));
@@ -1041,7 +1060,7 @@ final class DeclarationSearch {
         var compiler = ToolProvider.getSystemJavaCompiler();
         try (var fileManager = compiler.getStandardFileManager(null, Locale.ROOT, StandardCharsets.UTF_8)) {
             for (var sourceRoot : environment.sourceRoots()) {
-                if (!Files.isDirectory(sourceRoot)) {
+                if (!environment.searches(sourceRoot) || !Files.isDirectory(sourceRoot)) {
                     continue;
                 }
                 walkFilesInDeclarationOrder(sourceRoot,
@@ -1940,7 +1959,7 @@ final class DeclarationSearch {
             PrintWriter out)
             throws IOException, ToolException {
         if (relationships != null) {
-            matches = relationshipMatches(matches, true);
+            matches = relationshipMatches(matches, true, !source.classes().isEmpty());
             if (matches.isEmpty()) {
                 return;
             }
@@ -2064,10 +2083,12 @@ final class DeclarationSearch {
         out.flush();
     }
 
-    private List<ContextMatch> relationshipMatches(List<ContextMatch> matches, boolean deduplicate) throws ToolException {
+    private List<ContextMatch> relationshipMatches(List<ContextMatch> matches, boolean deduplicate,
+            boolean compiled) throws IOException, ToolException {
         var selected = new ArrayList<ContextMatch>();
         for (var match : matches) {
-            if (relationships.matches(match.key(), match.kind()) && (!deduplicate || emittedRelationships.add(match.key()))) {
+            if (relationships.matches(match.key(), match.kind(), compiled)
+                    && (!deduplicate || emittedRelationships.add(match.key()))) {
                 selected.add(match);
             }
         }

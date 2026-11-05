@@ -97,6 +97,8 @@ jist --format json java.lang.String.length
 
 A Java file on a directory source path takes precedence over matching ClassFiles, so searches reflect current project source without requiring compilation. Source archives remain attached source for their matching ClassFiles.
 
+`--exclude-path <path>` narrows searches by excluding input roots. Separate multiple paths with the platform path separator, as with `--class-path` and `--module-path`. Paths are matched by normalized absolute location, not by a recursive pattern. Excluded inputs remain available for type resolution, relationship targets, ancestor traversal, and source attachment.
+
 ## Documentation
 
 The [wiki](https://github.com/Netflix/jist/wiki) covers:

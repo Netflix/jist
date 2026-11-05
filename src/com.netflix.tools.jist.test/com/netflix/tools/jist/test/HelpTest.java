@@ -78,6 +78,7 @@ class HelpTest {
         assertEquals(0, checker.isSupportedOption("--version"));
         assertEquals(0, checker.isSupportedOption("--exclude-application-classes"));
         assertEquals(0, checker.isSupportedOption("--exclude-system-modules"));
+        assertEquals(1, checker.isSupportedOption("--exclude-path"));
         for (var option : List.of("--module-path", "-p", "--upgrade-module-path", "--patch-module",
                 "--module-source-path", "--module", "-m", "--add-modules", "--add-reads", "--add-exports",
                 "--limit-modules", "--system", "--release")) {
@@ -293,6 +294,8 @@ class HelpTest {
                                                             private, or all
 
                 Search:
+                  --exclude-path <path>                   Exclude input paths from searches, not resolution
+                                                            (path-separator-delimited, as with --class-path)
                   -k, --kind <kind>                       Include symbols of this kind; repeatable
                                                             module, package, type, class, interface,
                                                             enum, record, annotation, method, or field

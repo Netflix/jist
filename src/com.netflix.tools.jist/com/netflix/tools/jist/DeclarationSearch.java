@@ -268,6 +268,9 @@ final class DeclarationSearch {
                     }
                 }
                 for (var module : environment.moduleInputs()) {
+                    if (!environment.searches(module)) {
+                        continue;
+                    }
                     if (relationships == null
                             && module.descriptor().isAutomatic()
                             && (opts.kinds().isEmpty() || opts.listsModules())
@@ -330,6 +333,9 @@ final class DeclarationSearch {
             Set<String> emittedPackages,
             Map<String, EnumeratedSource> parsedSources)
             throws IOException, ToolException {
+        if (!environment.searches(entry)) {
+            return;
+        }
         if (Files.isDirectory(entry)) {
             walkFilesInDeclarationOrder(entry,
                     classFile -> {
@@ -696,7 +702,7 @@ final class DeclarationSearch {
                     input.visiblePackages());
         }
         for (var root : sources.explicitPaths()) {
-            if (!Files.isDirectory(root)) {
+            if (!environment.searches(root) || !Files.isDirectory(root)) {
                 continue;
             }
             var normalizedRoot = root.toAbsolutePath().normalize();
@@ -941,6 +947,9 @@ final class DeclarationSearch {
             ExecutorService executor)
             throws IOException, ToolException {
         for (var entry : entries) {
+            if (!environment.searches(entry)) {
+                continue;
+            }
             if (Files.isDirectory(entry)) {
                 try (var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
                     walkFilesInDeclarationOrder(
@@ -1000,6 +1009,9 @@ final class DeclarationSearch {
             throws IOException, ToolException {
         for (var module : environment.moduleInputs()) {
             var entry = module.location();
+            if (!environment.searches(module)) {
+                continue;
+            }
             if (module.descriptor().isAutomatic() && opts.listsModules() && matchesListedPrefix(opts, module.name())) {
                 if (!printListSymbol(out, SymbolKind.MODULE, module.name(), null)) {
                     out.println(module.name() + ": " + renderAutomaticModuleDeclaration(module.descriptor()));
@@ -1048,7 +1060,7 @@ final class DeclarationSearch {
         var compiler = ToolProvider.getSystemJavaCompiler();
         try (var fileManager = compiler.getStandardFileManager(null, Locale.ROOT, StandardCharsets.UTF_8)) {
             for (var sourceRoot : environment.sourceRoots()) {
-                if (!Files.isDirectory(sourceRoot)) {
+                if (!environment.searches(sourceRoot) || !Files.isDirectory(sourceRoot)) {
                     continue;
                 }
                 walkFilesInDeclarationOrder(sourceRoot,

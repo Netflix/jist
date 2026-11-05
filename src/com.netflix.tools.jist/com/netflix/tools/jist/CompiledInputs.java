@@ -42,11 +42,15 @@ final class CompiledInputs {
         if (!options.excludeApplicationClasses()) {
             if (readsUnnamedModule(options)) {
                 for (var path : parsePathList(options.classPath())) {
-                    scanEntry(path, reader, consumer, _ -> true);
+                    if (environment.searches(path)) {
+                        scanEntry(path, reader, consumer, _ -> true);
+                    }
                 }
             }
             for (var module : environment.moduleInputs()) {
-                scanEntry(module.location(), reader, consumer, module::includesResource);
+                if (environment.searches(module)) {
+                    scanEntry(module.location(), reader, consumer, module::includesResource);
+                }
             }
         }
         var modules = environment.modules().systemPackages().keySet();
@@ -79,6 +83,24 @@ final class CompiledInputs {
                 system.close();
             }
         }
+    }
+
+    static byte[] readClass(Path root, String resource) throws IOException {
+        if (Files.isDirectory(root)) {
+            var file = root.resolve(resource);
+            return Files.isRegularFile(file) ? Files.readAllBytes(file) : null;
+        }
+        if (Files.isRegularFile(root)) {
+            try (var jar = new JarFile(root.toFile(), true, ZipFile.OPEN_READ, Runtime.version())) {
+                var entry = jar.getJarEntry(resource);
+                if (entry != null) {
+                    try (var input = jar.getInputStream(entry)) {
+                        return readAllBytes(input, entry.getSize());
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     static byte[] readAllBytes(InputStream input, long size) throws IOException {

@@ -94,7 +94,7 @@ final class UsageSearch {
         scanCompiledUsages(opts, target, usageOutput);
         var visited = new HashSet<Path>();
         for (var sourceRoot : environment.sourceRoots()) {
-            if (!Files.isDirectory(sourceRoot)) {
+            if (!environment.searches(sourceRoot) || !Files.isDirectory(sourceRoot)) {
                 continue;
             }
             try (var files = Files.walk(sourceRoot)) {

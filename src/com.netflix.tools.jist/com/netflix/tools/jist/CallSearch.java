@@ -116,6 +116,7 @@ final class CallSearch implements Closeable {
                     (bytes, location) -> compiled(bytes, location.get(), sources, out));
             var candidates = new LinkedHashMap<URI, SourceCandidate>();
             for (var root : sources.explicitPaths()) {
+                if (!environment.searches(root)) continue;
                 try (var files = Files.walk(root)) {
                     var iterator = files.filter(path -> path.toString().endsWith(".java"))
                             .filter(path -> !path.getFileName().toString().equals("module-info.java")).iterator();

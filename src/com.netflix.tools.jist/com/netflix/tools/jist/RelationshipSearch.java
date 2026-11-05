@@ -73,19 +73,20 @@ final class RelationshipSearch implements Closeable {
                 }
             }
             if (!search.subtypes.isEmpty() || !search.overrides.isEmpty()) {
-                var hierarchy = ClassHierarchy.read(options, environment);
-                if (!search.subtypes.isEmpty()) {
-                    var targets = search.subtypes.stream()
-                            .map(type -> type.getQualifiedName().toString())
-                            .collect(Collectors.toUnmodifiableSet());
-                    search.compiledSubtypes = hierarchy.subtypes(targets, options.direct());
-                }
-                if (!search.overrides.isEmpty()) {
-                    var owners = search.overrides.stream()
-                            .map(method -> (TypeElement) method.getEnclosingElement())
-                            .map(type -> type.getQualifiedName().toString())
-                            .collect(Collectors.toUnmodifiableSet());
-                    search.compiledOverrideOwners = hierarchy.overrideOwners(owners);
+                try (var hierarchy = ClassHierarchy.read(options, environment)) {
+                    if (!search.subtypes.isEmpty()) {
+                        var targets = search.subtypes.stream()
+                                .map(type -> type.getQualifiedName().toString())
+                                .collect(Collectors.toUnmodifiableSet());
+                        search.compiledSubtypes = hierarchy.subtypes(targets, options.direct());
+                    }
+                    if (!search.overrides.isEmpty()) {
+                        var owners = search.overrides.stream()
+                                .map(method -> (TypeElement) method.getEnclosingElement())
+                                .map(type -> type.getQualifiedName().toString())
+                                .collect(Collectors.toUnmodifiableSet());
+                        search.compiledOverrideOwners = hierarchy.overrideOwners(owners);
+                    }
                 }
             }
             analysis.checkDiagnostics();

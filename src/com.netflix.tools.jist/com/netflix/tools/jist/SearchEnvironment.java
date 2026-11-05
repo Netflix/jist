@@ -1226,30 +1226,6 @@ final class SearchEnvironment {
         return result;
     }
 
-    static SourcePaths expandSourcePaths(String sourcePath) {
-        if (sourcePath == null)
-            return new SourcePaths(List.of(), List.of());
-        var paths = new ArrayList<Path>();
-        var opened = new ArrayList<FileSystem>();
-        for (var part : sourcePath.split(File.pathSeparator)) {
-            var p = Path.of(part);
-            if ((p.toString().endsWith(".jar")
-                            || p.toString().endsWith(".zip"))
-                    && Files.isRegularFile(p)) {
-                try {
-                    var fs = FileSystems.newFileSystem(p);
-                    opened.add(fs);
-                    paths.add(fs.getPath("/"));
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            } else {
-                paths.add(p);
-            }
-        }
-        return new SourcePaths(List.copyOf(paths), List.copyOf(opened));
-    }
-
     static String jrtModuleName(String location) {
         if (location == null || !location.startsWith("jrt:/"))
             return null;

@@ -31,12 +31,16 @@ final class ClassHierarchy implements Closeable {
     private final Map<String, Node> types = new ConcurrentHashMap<>();
     private final Map<String, List<String>> resolvedParents = new HashMap<>();
     private final SearchEnvironment environment;
+    private final SourceLookup sources;
+    private final Set<String> sourceTypes = ConcurrentHashMap.newKeySet();
+    private final Set<Path> sourceFiles = ConcurrentHashMap.newKeySet();
     private final URLClassLoader classPath;
     private FileSystem system;
     private boolean closeSystem;
 
-    private ClassHierarchy(Options options, SearchEnvironment environment) throws MalformedURLException {
+    private ClassHierarchy(Options options, SearchEnvironment environment) throws IOException, ToolException {
         this.environment = environment;
+        this.sources = environment.sources();
         var urls = new ArrayList<URL>();
         if (readsUnnamedModule(options)) {
             for (var entry : parsePathList(options.classPath())) {
@@ -49,6 +53,7 @@ final class ClassHierarchy implements Closeable {
     static ClassHierarchy read(Options options, SearchEnvironment environment) throws IOException, ToolException {
         var hierarchy = new ClassHierarchy(options, environment);
         try {
+            hierarchy.sources.prepareOrdinarySources();
             var inputs = new ArrayList<Input>();
             if (!options.excludeApplicationClasses()) {
                 if (readsUnnamedModule(options)) {
@@ -98,7 +103,7 @@ final class ClassHierarchy implements Closeable {
 
     @Override
     public void close() throws IOException {
-        try (classPath) {
+        try (sources; classPath) {
             if (closeSystem) {
                 system.close();
             }
@@ -111,6 +116,49 @@ final class ClassHierarchy implements Closeable {
 
     Set<String> overrideOwners(Set<String> targets) throws IOException, ToolException {
         return descendants(targets, false, true);
+    }
+
+    Set<Path> sourceFiles() {
+        return Set.copyOf(sourceFiles);
+    }
+
+    /** Compiled candidates whose ancestry must account for current directory source. */
+    Set<String> sourceAffected() throws IOException, ToolException {
+        if (sources.explicitPaths().isEmpty()) {
+            return Set.of();
+        }
+        var matches = new HashSet<String>();
+        var memo = new HashMap<String, Boolean>();
+        for (var candidate : types.keySet()) {
+            if (reachesSource(candidate, memo, new HashSet<>())) {
+                matches.add(candidate);
+            }
+        }
+        return Set.copyOf(matches);
+    }
+
+    private boolean reachesSource(String candidate, Map<String, Boolean> memo, Set<String> visiting)
+            throws IOException, ToolException {
+        var known = memo.get(candidate);
+        if (known != null) {
+            return known;
+        }
+        if (!visiting.add(candidate)) {
+            return false;
+        }
+        var parents = parents(candidate);
+        boolean result = sourceTypes.contains(candidate);
+        if (!result) {
+            for (var parent : parents) {
+                if (reachesSource(parent, memo, visiting)) {
+                    result = true;
+                    break;
+                }
+            }
+        }
+        visiting.remove(candidate);
+        memo.put(candidate, result);
+        return result;
     }
 
     private Set<String> descendants(Set<String> targets, boolean direct, boolean includeTargets) throws IOException, ToolException {
@@ -181,6 +229,7 @@ final class ClassHierarchy implements Closeable {
         if (model.isModuleInfo()) {
             return;
         }
+        rememberSource(model);
         var node = new Node(inputOrder, parents(model));
         types.compute(UsageSearch.displayClassName(model),
                 (_, existing) ->
@@ -209,8 +258,27 @@ final class ClassHierarchy implements Closeable {
             }
             parents = model == null ? List.of() : parents(model);
         }
+        if (model != null) {
+            rememberSource(model);
+        } else if (SearchEnvironment.classFileCandidates(name).stream().anyMatch(sources::mayHaveOrdinarySource)) {
+            var source = environment.resolveSourceFile(name);
+            if (source != null) {
+                sourceTypes.add(name);
+                sourceFiles.add(source);
+            }
+        }
         resolvedParents.put(name, parents);
         return parents;
+    }
+
+    private void rememberSource(ClassModel model) {
+        if (sources.mayHaveOrdinarySource(model.thisClass().asInternalName())) {
+            var source = sources.ordinarySource(model);
+            if (source != null) {
+                sourceTypes.add(UsageSearch.displayClassName(model));
+                sourceFiles.add(source);
+            }
+        }
     }
 
     private ClassModel classPathClass(String name) throws IOException {

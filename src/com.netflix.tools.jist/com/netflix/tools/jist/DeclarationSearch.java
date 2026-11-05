@@ -2084,7 +2084,7 @@ final class DeclarationSearch {
     }
 
     private List<ContextMatch> relationshipMatches(List<ContextMatch> matches, boolean deduplicate,
-            boolean compiled) throws ToolException {
+            boolean compiled) throws IOException, ToolException {
         var selected = new ArrayList<ContextMatch>();
         for (var match : matches) {
             if (relationships.matches(match.key(), match.kind(), compiled)

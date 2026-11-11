@@ -21,7 +21,6 @@ import java.lang.classfile.ClassModel;
 
 import com.netflix.tools.jist.CompiledInputs.Filter;
 
-import static com.netflix.tools.jist.SearchEnvironment.parsePathList;
 import static com.netflix.tools.jist.SearchEnvironment.readsUnnamedModule;
 
 /** Minimal transient type hierarchy read directly from the selected ClassFiles. */
@@ -43,7 +42,7 @@ final class ClassHierarchy implements Closeable {
         this.sources = environment.sources();
         var urls = new ArrayList<URL>();
         if (readsUnnamedModule(options)) {
-            for (var entry : parsePathList(options.classPath())) {
+            for (var entry : environment.classPathEntries()) {
                 urls.add(entry.toAbsolutePath().normalize().toUri().toURL());
             }
         }
@@ -57,7 +56,7 @@ final class ClassHierarchy implements Closeable {
             var inputs = new ArrayList<Input>();
             if (!options.excludeApplicationClasses()) {
                 if (readsUnnamedModule(options)) {
-                    for (var path : parsePathList(options.classPath())) {
+                    for (var path : environment.classPathEntries()) {
                         if (environment.searches(path)) {
                             inputs.add(new Input(path, _ -> true));
                         }

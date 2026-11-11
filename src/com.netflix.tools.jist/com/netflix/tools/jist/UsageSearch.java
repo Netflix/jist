@@ -398,7 +398,7 @@ final class UsageSearch {
 
     private UsageTarget resolveUsageTarget(SymbolSelection query, Options opts) throws IOException, ToolException {
         var binaryName = query.path();
-        var resolved = readsUnnamedModule(opts) ? resolveClass(binaryName, parsePathList(opts.classPath())) : null;
+        var resolved = readsUnnamedModule(opts) ? resolveClass(binaryName, environment.classPathEntries()) : null;
         if (resolved == null) {
             resolved = environment.resolveModuleClass(binaryName);
         }

@@ -32,6 +32,7 @@ final class SearchEnvironment {
     private static final Map<Path, Map<String, java.lang.module.ModuleReference>> SYSTEM_MODULES = new java.util.concurrent.ConcurrentHashMap<>();
 
     private final Options options;
+    private List<Path> classPath;
     private final Set<Path> excludedPaths;
     private ModuleResolution resolvedModules;
     private Map<String, List<Path>> parsedPatches;
@@ -46,6 +47,11 @@ final class SearchEnvironment {
                         .map(Path::of)
                         .map(path -> path.toAbsolutePath().normalize())
                         .collect(Collectors.toUnmodifiableSet());
+    }
+
+    List<Path> classPathEntries() throws ToolException {
+        if (classPath == null) classPath = ClassPaths.prepare(options.classPath());
+        return classPath;
     }
 
     boolean searches(Path path) {
@@ -65,6 +71,7 @@ final class SearchEnvironment {
     }
 
     ModuleResolution modules() throws IOException, ToolException {
+        classPathEntries();
         if (resolvedModules == null)
             resolvedModules = computeModuleResolution(options);
         return resolvedModules;
@@ -77,6 +84,7 @@ final class SearchEnvironment {
     }
 
     List<String> compilerOptions(boolean enablePreview, boolean preserveNoSystem) throws IOException, ToolException {
+        classPathEntries();
         var opts = options;
         var result = new ArrayList<String>();
         result.add("-proc:none");
@@ -251,7 +259,7 @@ final class SearchEnvironment {
         if (cached != null) return cached;
         var opts = options;
         boolean exists = readsUnnamedModule(opts)
-                        && resolveClass(target, parsePathList(opts.classPath())) != null
+                        && resolveClass(target, classPathEntries()) != null
                 || resolveModuleClass(target) != null
                 || resolveSystemClass(target) != null
                 || resolveSourceFile(target) != null;
@@ -1101,7 +1109,7 @@ final class SearchEnvironment {
                 }
             }
         } else if (Files.isRegularFile(entry)) {
-            try (var jar = new JarFile(entry.toFile(), true, ZipFile.OPEN_READ, Runtime.version())) {
+            try (var jar = ClassPaths.openArchive(entry, true)) {
                 if (!patch && jar.getJarEntry(candidate) == null && jar.getJarEntry(outerName + CLASS_EXT) == null) return null;
                 var entries = jar.versionedStream()
                         .filter(file -> !file.isDirectory())
@@ -1138,7 +1146,7 @@ final class SearchEnvironment {
                     }
                 }
             } else if (Files.isRegularFile(entry)) {
-                try (var jar = new JarFile(entry.toFile(), true, ZipFile.OPEN_READ, Runtime.version())) {
+                try (var jar = ClassPaths.openArchive(entry, true)) {
                     for (var candidate : candidates) {
                         if (jar.getJarEntry(candidate) != null) {
                             return readClassGroup(entry, candidate, false);

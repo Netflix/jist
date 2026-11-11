@@ -104,7 +104,7 @@ final class ReferencedTypes {
     private static SearchEnvironment.ResolvedClass resolve(Options options, SearchEnvironment environment, String name)
             throws IOException, ToolException {
         var compiled = SearchEnvironment.readsUnnamedModule(options)
-                ? SearchEnvironment.resolveClass(name, SearchEnvironment.parsePathList(options.classPath())) : null;
+                ? SearchEnvironment.resolveClass(name, environment.classPathEntries()) : null;
         if (compiled == null) compiled = environment.resolveModuleClass(name);
         if (compiled == null) compiled = environment.resolveSystemClass(name);
         return compiled;

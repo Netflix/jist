@@ -398,6 +398,85 @@ class CallQueryTest {
     }
 
     @Test
+    void unrelatedMissingOverloadTypesDoNotPreventCompiledCallSearch(@TempDir Path directory) throws Exception {
+        var fixture = compileMissingOverload(directory);
+        for (var sourcePath : List.of(directory.resolve("no-sources"), fixture.sources())) {
+            var result = invoke(List.of(
+                    "--limit-modules", "java.base", "--exclude-system-modules",
+                    "--class-path", fixture.classes().toString(), "--source-path", sourcePath.toString(),
+                    "--callers", "java.time.Clock.systemUTC"));
+            assertSuccess(result);
+            assertEquals(1, result.output().lines().count(), result.output());
+            assertTrue(result.output().contains("example.OptionalCaller.clock() -> java.time.Clock.systemUTC()"),
+                    result.output());
+        }
+    }
+
+    @Test
+    void selectingAnUnresolvedOverloadProducesAnActionableError(@TempDir Path directory) throws Exception {
+        var fixture = compileMissingOverload(directory);
+        for (var method : List.of("clock", "array", "result", "generic")) {
+            var result = invoke(List.of(
+                    "--limit-modules", "java.base", "--exclude-system-modules",
+                    "--class-path", fixture.classes().toString(),
+                    "--callers", "example.OptionalCaller." + method));
+            assertEquals(2, result.code(), result.error());
+            assertTrue(result.error().startsWith("Error:"), result.error());
+            assertTrue(result.error().contains("example.OptionalCaller." + method), result.error());
+            assertTrue(result.error().contains("optional.Missing"), result.error());
+        }
+    }
+
+    @Test
+    void typeVariableErasureStillMatchesCompiledCalls(@TempDir Path directory) throws Exception {
+        var fixture = compileMissingOverload(directory);
+        var result = invoke(List.of(
+                "--limit-modules", "java.base", "--exclude-system-modules",
+                "--class-path", fixture.classes().toString(),
+                "--callees", "example.OptionalCaller.number"));
+        assertSuccess(result);
+        assertTrue(result.output().contains(
+                "example.OptionalCaller.number(java.lang.Number) -> java.time.Clock.systemDefaultZone()"), result.output());
+    }
+
+    private static MissingOverload compileMissingOverload(Path directory) throws Exception {
+        var missing = directory.resolve("src/optional/Missing.java");
+        Files.createDirectories(missing.getParent());
+        Files.writeString(missing, "package optional; public class Missing {}\n");
+        var caller = directory.resolve("src/example/OptionalCaller.java");
+        Files.createDirectories(caller.getParent());
+        Files.writeString(caller, """
+                package example;
+                import java.time.Clock;
+                public class OptionalCaller {
+                    public Clock clock(optional.Missing option) { return null; }
+                    public <T extends Number> Clock clock(T option) { return null; }
+                    public Clock array(optional.Missing[] option) { return null; }
+                    public optional.Missing result() { return null; }
+                    public <T extends optional.Missing> Clock generic(T option) { return null; }
+                    public Clock clock() { return Clock.systemUTC(); }
+                    public <T extends Number> Clock number(T option) { return Clock.systemDefaultZone(); }
+                }
+                """);
+        var classes = Files.createDirectories(directory.resolve("classes"));
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null, List.of("-g", "-d", classes.toString()), null,
+                    manager.getJavaFileObjects(missing, caller)).call());
+        }
+        Files.delete(classes.resolve("optional/Missing.class"));
+        var sources = directory.resolve("sources.jar");
+        try (var jar = new java.util.jar.JarOutputStream(Files.newOutputStream(sources))) {
+            jar.putNextEntry(new java.util.jar.JarEntry("example/OptionalCaller.java"));
+            Files.copy(caller, jar);
+            jar.closeEntry();
+        }
+        return new MissingOverload(classes, sources);
+    }
+
+    private record MissingOverload(Path classes, Path sources) {}
+
+    @Test
     void missingDebugInformationDoesNotInventSourceCoordinates(@TempDir Path classes) throws Exception {
         var compiler = ToolProvider.getSystemJavaCompiler();
         try (var manager = compiler.getStandardFileManager(null, null, null);

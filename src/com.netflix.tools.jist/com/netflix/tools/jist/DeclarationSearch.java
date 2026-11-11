@@ -315,7 +315,7 @@ final class DeclarationSearch {
         var symbols = new CountingPrintWriter(out);
         listSourceContexts(opts, symbols);
         if (symbols.count() == 0) {
-            throw new ToolException(1,
+            throw ToolException.notFound(
                     simpleNameTarget(opts.target()) ? "Symbol not found: " + opts.target() : "Class not found: " + opts.target() + "; no symbol prefix matches");
         }
     }
@@ -806,7 +806,7 @@ final class DeclarationSearch {
         var listing = opts.kinds().isEmpty() ? opts.withTargetAndKinds(opts.target(), defaultKinds()) : opts;
         listClasses(listing, symbols);
         if (symbols.count() == 0) {
-            throw new ToolException(1,
+            throw ToolException.notFound(
                     simpleNameTarget(opts.target()) ? "Symbol not found: " + query.path() : "Class not found: " + query.path() + "; no symbol prefix matches");
         }
     }
@@ -814,7 +814,7 @@ final class DeclarationSearch {
     void searchFileSymbols(Options opts, SymbolSelection query, PrintWriter out) throws IOException, ToolException {
         var path = Path.of(query.path());
         if (!Files.isRegularFile(path)) {
-            throw new ToolException(1, "File locator does not exist: " + query.path());
+            throw ToolException.notFound("File locator does not exist: " + query.path());
         }
         var selected = opts.withTargetAndKinds(null,
                 opts.kinds().isEmpty() ? defaultKinds() : opts.kinds());
@@ -832,7 +832,7 @@ final class DeclarationSearch {
                     if (query.member() != null) {
                         var names = sourceClassNames(unit);
                         if (names.isEmpty()) {
-                            throw new ToolException(1, "No symbols found in " + path);
+                            throw ToolException.notFound("No symbols found in " + path);
                         }
                         selected = selected.withTargetAndKinds(names.getFirst() + "." + query.member(), selected.kinds());
                     }
@@ -840,7 +840,7 @@ final class DeclarationSearch {
                 }
             }
             if (symbols.count() == 0) {
-                throw new ToolException(1, "Member not found: " + path + "." + query.member());
+                throw ToolException.notFound("Member not found: " + path + "." + query.member());
             }
         } else if (query.path().endsWith(CLASS_EXT)) {
             var models = readClassGroup(path);
@@ -860,7 +860,7 @@ final class DeclarationSearch {
                         model, selected, visibility);
             }
             if (symbols.count() == 0) {
-                throw new ToolException(1, "Member not found: " + attributionKey(outer).replace('$', '.') + "." + query.member());
+                throw ToolException.notFound("Member not found: " + attributionKey(outer).replace('$', '.') + "." + query.member());
             }
         } else {
             throw new ToolException(1, "Unsupported file locator: " + query.path());
@@ -1846,7 +1846,7 @@ final class DeclarationSearch {
             var structure = model.structure(file.getFileName().toString(), visibility);
             var names = structure.classNames();
             if (names.isEmpty()) {
-                throw new ToolException(1, "No symbols found in " + file);
+                throw ToolException.notFound("No symbols found in " + file);
             }
             var owner = names.getFirst();
             var selected = opts.withTargetAndKinds(query.member() != null ? owner + "." + query.member() : owner,
@@ -1909,7 +1909,7 @@ final class DeclarationSearch {
         }
         var sourceFile = environment.resolveSourceFile(binaryName);
         if (sourceFile == null) {
-            throw new ToolException(1, "Class not found: " + binaryName);
+            throw ToolException.notFound("Class not found: " + binaryName);
         }
         var visibility = opts.visibility() != null ? opts.visibility() : Visibility.ALL;
         var bytes = Files.readAllBytes(sourceFile);
@@ -1968,7 +1968,7 @@ final class DeclarationSearch {
             if (!opts.kinds().isEmpty()) {
                 return;
             }
-            throw new ToolException(1, "Symbol not found: " + opts.target());
+            throw ToolException.notFound("Symbol not found: " + opts.target());
         }
         if (out instanceof SymbolOutput output && output.listOnly()) {
             var location = source.sourceLocation() != null ? source.sourceLocation() : source.classLocation();

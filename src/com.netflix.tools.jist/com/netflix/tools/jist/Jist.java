@@ -200,12 +200,15 @@ public final class Jist implements ToolProvider, OptionChecker {
             declarations.listClasses(listing, out);
             return 0;
         } catch (ToolException e) {
+            if (jsonOutput != null) jsonOutput.failure(e.exitCode, e.kind, e.getMessage());
             err.println("Error: " + e.getMessage());
             return e.exitCode;
         } catch (JavaAnalysis.UnresolvedTypeException | IOException e) {
+            if (jsonOutput != null) jsonOutput.failure(2, "error", e.getMessage());
             err.println("Error: " + e.getMessage());
             return 2;
         } catch (Exception e) {
+            if (jsonOutput != null) jsonOutput.failure(2, "error", e.toString());
             e.printStackTrace(err);
             return 2;
         } finally {

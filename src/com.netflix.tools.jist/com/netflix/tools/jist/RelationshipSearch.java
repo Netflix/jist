@@ -58,11 +58,14 @@ final class RelationshipSearch implements Closeable {
         try {
             for (var name : options.subtypes()) {
                 if (!environment.classTargetExists(name)) {
-                    throw new ToolException(1, "Type not found: " + name);
+                    throw ToolException.notFound("Type not found: " + name);
                 }
                 search.subtypes.add(name);
             }
             for (var name : options.supertypes()) {
+                if (!environment.classTargetExists(name)) {
+                    throw ToolException.notFound("Type not found: " + name);
+                }
                 search.parents(search.analysis().resolveType(name), search.supertypes, !options.direct());
             }
             for (var name : options.overrides()) {
@@ -82,7 +85,7 @@ final class RelationshipSearch implements Closeable {
                     found |= !methods.isEmpty();
                 }
                 if (!found) {
-                    throw new ToolException(1, "No overridable method: " + name);
+                    throw ToolException.notFound("No overridable method: " + name);
                 }
             }
             if (!search.subtypes.isEmpty() || !search.overrides.isEmpty()) {

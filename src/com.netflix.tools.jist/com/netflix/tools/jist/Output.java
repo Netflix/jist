@@ -62,6 +62,12 @@ final class Output {
             json.resultSource(source);
         }
 
+        void failure(int exitCode, String kind, String message) {
+            json.exitCode = exitCode;
+            json.diagnosticKind = kind;
+            json.diagnosticMessage = message;
+        }
+
         void finish() {
             flush();
             json.finish();
@@ -73,6 +79,9 @@ final class Output {
         private final StringBuilder line = new StringBuilder();
         private boolean first = true;
         private boolean finished;
+        private int exitCode;
+        private String diagnosticKind;
+        private String diagnosticMessage;
         private ResultOrigin origin;
         private SourceRange source;
 
@@ -178,6 +187,15 @@ final class Output {
             }
             try {
                 emitLine();
+                delegate.write("],\"exitCode\":");
+                delegate.write(Integer.toString(exitCode));
+                delegate.write(",\"diagnostics\":[");
+                if (diagnosticKind != null) {
+                    delegate.write('{');
+                    writeField("kind", diagnosticKind, false);
+                    writeField("message", diagnosticMessage, true);
+                    delegate.write('}');
+                }
                 delegate.write("]}\n");
                 delegate.flush();
                 finished = true;

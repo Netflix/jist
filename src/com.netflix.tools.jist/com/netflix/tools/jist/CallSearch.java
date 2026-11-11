@@ -81,7 +81,7 @@ final class CallSearch implements Closeable {
                 found |= select(selection, selected);
             }
             if (!found) {
-                throw new ToolException(1, "Executable not found: " + target);
+                throw ToolException.notFound("Executable not found: " + target);
             }
         }
     }

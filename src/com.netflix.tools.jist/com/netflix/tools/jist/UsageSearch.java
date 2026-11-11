@@ -407,7 +407,7 @@ final class UsageSearch {
         }
         var sourceFile = resolved == null ? environment.resolveSourceFile(binaryName) : null;
         if (resolved == null && sourceFile == null) {
-            throw new ToolException(1, "Class not found: " + query.path());
+            throw ToolException.notFound("Class not found: " + query.path());
         }
 
         var visibility = opts.visibility() != null
@@ -415,7 +415,7 @@ final class UsageSearch {
                 : query.member() != null ? Visibility.ALL : Visibility.LIBRARY;
         var keys = resolved != null ? usageKeys(resolved.classes(), binaryName, query.member(), visibility) : usageKeys(sourceFile, binaryName, query.member(), visibility);
         if (keys.isEmpty()) {
-            throw new ToolException(1, "Member not found: " + binaryName + "." + query.member());
+            throw ToolException.notFound("Member not found: " + binaryName + "." + query.member());
         }
         var bytecodeTypes = resolved != null ? usageTypeInternalNames(resolved.classes(), binaryName, query.member()) : Set.<String>of();
         var bytecodeOwners = resolved != null ? usageOwnerInternalNames(resolved.classes(), binaryName) : Set.<String>of();

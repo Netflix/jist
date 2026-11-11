@@ -93,6 +93,16 @@ Stream qualified, machine-readable results:
 jist --format json java.lang.String.length
 ```
 
+JSON output streams a version 1 envelope with `format: "jist"` and a `results` array. Each result contains `text` and available structured `origin` and `source` information. The envelope ends with `exitCode` and `diagnostics`, for example:
+
+```json
+{"format":"jist","version":1,"results":[],"exitCode":1,"diagnostics":[{"kind":"not_found","message":"Executable not found: example.Missing.run"}]}
+```
+
+A successful search has `exitCode: 0` and an empty `diagnostics` array, even when it finds no references or call edges. An unsuccessful search retains results emitted before the failure. Each diagnostic has a `kind` and `message`: `not_found` means the requested target was absent; `error` means the query was invalid or the search failed. Exit code 1 alone does not distinguish these cases. Consumers must inspect the outcome before treating results as complete. These fields extend the version 1 envelope without changing existing result fields.
+
+Diagnostics also remain on standard error, and `exitCode` matches the tool's return status. Errors encountered before command-line parsing selects JSON output are reported only on standard error; help, version, and completion output retain their own formats.
+
 `--release` applies javac's Java SE API signatures when Jist attributes project or attached source. It does not change the ClassFiles Jist searches or select historical JDK implementation source; when matching source is unavailable, Jist falls back to ClassFile signatures.
 
 A Java file on a directory source path takes precedence over matching ClassFiles, so searches reflect current project source without requiring compilation. Source archives remain attached source for their matching ClassFiles.

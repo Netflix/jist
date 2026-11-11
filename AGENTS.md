@@ -104,7 +104,9 @@ JDK classes resolve from the selected system image. `<java.home>/lib/src.zip` is
   only javac-attributed source token ranges in usage results; never infer highlights by matching text.
   ClassFile-only usages without attributed ranges and declaration output are not highlighted.
   `--format json` emits a streaming versioned envelope whose results contain complete output rows
-  and structured origins without headings, color, or blank breaks.
+  and structured origins without headings, color, or blank breaks. The envelope ends with `exitCode`
+  and `diagnostics`; failed searches retain partial rows. Diagnostic kind `not_found` distinguishes
+  absent targets from invalid queries and search failures (`error`), independently of the exit code.
   `--show-origin` replaces the short source filename with its project path or archive URI, qualifies
   compiled fallback rows with their ClassFile origin, and renders system origins in module-qualified form. `--no-line-number` removes source
   coordinates and `--break` inserts one blank line between

@@ -50,7 +50,7 @@ final class ReferencedTypes {
         }
         var results = new LinkedHashMap<String, SymbolKind>();
         if (compiled == null) {
-            if (sourceFile == null) throw new ToolException(1, "Class or Java source not found: " + target);
+            if (sourceFile == null) throw ToolException.notFound("Class or Java source not found: " + target);
             try (var analysis = JavaAnalysis.open(options, environment, List.of(sourceFile))) {
                 for (var unit : analysis.units()) {
                     if (unit.getSourceFile().toUri().equals(sourceFile.toUri())) {

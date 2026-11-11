@@ -18,9 +18,19 @@ final class ToolException extends Exception {
     private static final long serialVersionUID = 1L;
 
     final int exitCode;
+    final String kind;
 
     ToolException(int exitCode, String message) {
+        this(exitCode, "error", message);
+    }
+
+    private ToolException(int exitCode, String kind, String message) {
         super(message);
         this.exitCode = exitCode;
+        this.kind = kind;
+    }
+
+    static ToolException notFound(String message) {
+        return new ToolException(1, "not_found", message);
     }
 }

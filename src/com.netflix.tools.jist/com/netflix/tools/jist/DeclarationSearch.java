@@ -93,7 +93,7 @@ final class DeclarationSearch {
             sources.prepareOrdinarySources();
             if (!opts.excludeApplicationClasses()) {
                 if (readsUnnamedModule(opts)) {
-                    listClassPathEntries(opts, out, parsePathList(opts.classPath()), visibility, emittedPackages,
+                    listClassPathEntries(opts, out, environment.classPathEntries(), visibility, emittedPackages,
                             sources, executor);
                 }
                 listModulePathEntries(opts, out, visibility, emittedPackages, sources, executor);
@@ -252,7 +252,7 @@ final class DeclarationSearch {
             sources.prepareOrdinarySources();
             if (!opts.excludeApplicationClasses()) {
                 if (readsUnnamedModule(opts)) {
-                    for (var entry : parsePathList(opts.classPath())) {
+                    for (var entry : environment.classPathEntries()) {
                         listSourceContextEntry(
                                 opts,
                                 out,
@@ -362,7 +362,7 @@ final class DeclarationSearch {
                                 parsedSources);
                     });
         } else if (Files.isRegularFile(entry)) {
-            try (var jar = new JarFile(entry.toFile(), false, ZipFile.OPEN_READ, Runtime.version())) {
+            try (var jar = ClassPaths.openArchive(entry, false)) {
                 var iterator = jarEntries(jar);
                 var origin = "jar:" + entry.toAbsolutePath()
                         .normalize()
@@ -968,7 +968,7 @@ final class DeclarationSearch {
                     classes.finish();
                 }
             } else if (Files.isRegularFile(entry)) {
-                try (var jar = new JarFile(entry.toFile(), false, ZipFile.OPEN_READ, Runtime.version());
+                try (var jar = ClassPaths.openArchive(entry, false);
                      var archive = openParallelArchive(entry);
                      var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
                     var iterator = jarEntries(jar);
@@ -1035,7 +1035,7 @@ final class DeclarationSearch {
                     classes.finish();
                 }
             } else if (Files.isRegularFile(entry)) {
-                try (var jar = new JarFile(entry.toFile(), false, ZipFile.OPEN_READ, Runtime.version());
+                try (var jar = ClassPaths.openArchive(entry, false);
                      var archive = openParallelArchive(entry);
                      var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
                     var iterator = jarEntries(jar);
@@ -1864,7 +1864,7 @@ final class DeclarationSearch {
             return;
         }
         var binaryName = query.path();
-        var resolved = readsUnnamedModule(opts) ? resolveClass(binaryName, parsePathList(opts.classPath())) : null;
+        var resolved = readsUnnamedModule(opts) ? resolveClass(binaryName, environment.classPathEntries()) : null;
         if (resolved == null) {
             resolved = environment.resolveModuleClass(binaryName);
         }

@@ -16,7 +16,6 @@ package com.netflix.tools.jist;
 
 import module java.base;
 
-import static com.netflix.tools.jist.SearchEnvironment.parsePathList;
 import static com.netflix.tools.jist.SearchEnvironment.readsUnnamedModule;
 import static com.netflix.tools.jist.SearchEnvironment.unitLocation;
 
@@ -41,7 +40,7 @@ final class CompiledInputs {
             throws IOException, ToolException {
         if (!options.excludeApplicationClasses()) {
             if (readsUnnamedModule(options)) {
-                for (var path : parsePathList(options.classPath())) {
+                for (var path : environment.classPathEntries()) {
                     if (environment.searches(path)) {
                         scanEntry(path, reader, consumer, _ -> true);
                     }
@@ -91,7 +90,7 @@ final class CompiledInputs {
             return Files.isRegularFile(file) ? Files.readAllBytes(file) : null;
         }
         if (Files.isRegularFile(root)) {
-            try (var jar = new JarFile(root.toFile(), true, ZipFile.OPEN_READ, Runtime.version())) {
+            try (var jar = ClassPaths.openArchive(root, true)) {
                 var entry = jar.getJarEntry(resource);
                 if (entry != null) {
                     try (var input = jar.getInputStream(entry)) {
@@ -135,7 +134,7 @@ final class CompiledInputs {
                 }
             }
         } else if (Files.isRegularFile(path)) {
-            try (var jar = new JarFile(path.toFile(), true, ZipFile.OPEN_READ, Runtime.version())) {
+            try (var jar = ClassPaths.openArchive(path, true)) {
                 var iterator = jar.versionedStream()
                         .filter(entry -> !entry.isDirectory() && entry.getName().endsWith(".class"))
                         .iterator();

@@ -202,6 +202,9 @@ public final class Jist implements ToolProvider, OptionChecker {
         } catch (ToolException e) {
             err.println("Error: " + e.getMessage());
             return e.exitCode;
+        } catch (JavaAnalysis.UnresolvedTypeException | IOException e) {
+            err.println("Error: " + e.getMessage());
+            return 2;
         } catch (Exception e) {
             e.printStackTrace(err);
             return 2;

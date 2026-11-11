@@ -161,22 +161,45 @@ final class JavaAnalysis implements Closeable {
         var type = elements().getTypeElement(owner);
         if (type == null) type = resolveType(owner);
         var members = name.equals("<init>") ? type.getEnclosedElements() : elements().getAllMembers(type);
+        UnresolvedTypeException unresolved = null;
         for (var member : members) {
-            if (member instanceof ExecutableElement method
-                    && method.getSimpleName().contentEquals(name)
-                    && descriptor(method).equals(descriptor)) {
+            if (!(member instanceof ExecutableElement method) || !method.getSimpleName().contentEquals(name)) continue;
+            String candidate;
+            try {
+                candidate = descriptor(method);
+            } catch (UnresolvedTypeException e) {
+                unresolved = e;
+                continue;
+            }
+            if (descriptor.equals(candidate)) {
                 methods.put(lookup, method);
                 return method;
             }
         }
+        if (unresolved != null) throw unresolved;
         checkDiagnostics();
         throw new ToolException(2, "Cannot resolve method: " + owner + "." + name + descriptor);
     }
 
-    String descriptor(ExecutableElement method) {
-        return descriptors.computeIfAbsent(method, selected -> selected.getParameters().stream()
-                .map(parameter -> descriptor(parameter.asType()))
-                .collect(Collectors.joining("", "(", ")")) + descriptor(selected.getReturnType()));
+    private String descriptor(ExecutableElement method) {
+        try {
+            return descriptors.computeIfAbsent(method, selected -> selected.getParameters().stream()
+                    .map(parameter -> descriptor(parameter.asType()))
+                    .collect(Collectors.joining("", "(", ")")) + descriptor(selected.getReturnType()));
+        } catch (UnresolvedTypeException e) {
+            throw new UnresolvedTypeException("Cannot resolve method descriptor: "
+                    + ((TypeElement) method.getEnclosingElement()).getQualifiedName() + "."
+                    + method.getSimpleName() + ": " + e.getMessage()
+                    + ". Check that the required dependencies are on the class or module path.");
+        }
+    }
+
+    static final class UnresolvedTypeException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        UnresolvedTypeException(String message) {
+            super(message);
+        }
     }
 
     private String descriptor(TypeMirror type) {
@@ -193,7 +216,9 @@ final class JavaAnalysis implements Closeable {
             case ARRAY -> "[" + descriptor(((ArrayType) type).getComponentType());
             case DECLARED -> "L" + elements().getBinaryName((TypeElement) ((DeclaredType) type).asElement())
                     .toString().replace('.', '/') + ";";
-            default -> descriptor(types().erasure(type));
+            case TYPEVAR, INTERSECTION -> descriptor(types().erasure(type));
+            case ERROR -> throw new UnresolvedTypeException("Unresolved type " + type);
+            default -> throw new IllegalArgumentException("Not a JVM descriptor type: " + type.getKind() + " " + type);
         };
     }
 

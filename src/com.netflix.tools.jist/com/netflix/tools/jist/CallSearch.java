@@ -24,6 +24,7 @@ import java.lang.classfile.MethodModel;
 import java.lang.classfile.instruction.InvokeInstruction;
 import java.lang.classfile.instruction.InvokeDynamicInstruction;
 import java.lang.constant.DirectMethodHandleDesc;
+import java.lang.constant.MethodTypeDesc;
 import java.lang.reflect.AccessFlag;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
@@ -135,28 +136,40 @@ final class CallSearch implements Closeable {
     }
 
     private boolean visible(JavaAnalysis context, ExecutableElement method, boolean source) {
-        var module = context.elements().getModuleOf(method);
+        var visibility = options.visibility() != null ? options.visibility() : source ? Visibility.ALL : Visibility.LIBRARY;
+        return visibleOwner(context, (TypeElement) method.getEnclosingElement())
+                && visibility.visibleModifiers(method.getModifiers(), false);
+    }
+
+    private boolean visibleOwner(JavaAnalysis context, TypeElement owner) {
+        var module = context.elements().getModuleOf(owner);
         if (module == null || module.isUnnamed()) {
             if (!readsUnnamed) return false;
         } else if (!selectedModules.contains(module.getQualifiedName().toString())) {
             var packages = visiblePackages.getOrDefault(module.getQualifiedName().toString(), Set.of());
-            if (!packages.contains(context.elements().getPackageOf(method).getQualifiedName().toString())) return false;
+            if (!packages.contains(context.elements().getPackageOf(owner).getQualifiedName().toString())) return false;
         }
-        var visibility = options.visibility() != null ? options.visibility() : source ? Visibility.ALL : Visibility.LIBRARY;
-        return visibility.visibleModifiers(method.getModifiers(), false);
+        return true;
     }
 
     private boolean edge(JavaAnalysis context, ExecutableElement caller, ExecutableElement callee,
             String unit, String file, String origin, int line, String site, boolean source, PrintWriter out) {
         boolean callerMatch = incoming.contains(context.key(callee)) && visible(context, caller, source);
         boolean calleeMatch = outgoing.contains(context.key(caller)) && visible(context, callee, source);
+        return edge(context.key(caller), context.signature(caller), context.key(callee), context.signature(callee),
+                callerMatch, calleeMatch, unit, file, origin, line, site, out);
+    }
+
+    private boolean edge(String callerKey, String callerSignature, String calleeKey, String calleeSignature,
+            boolean callerMatch, boolean calleeMatch, String unit, String file, String origin, int line,
+            String site, PrintWriter out) {
         if (!callerMatch && !calleeMatch) return false;
         if (options.listOnly()) {
-            if (callerMatch) symbol(context, caller, origin, out);
-            if (calleeMatch) symbol(context, callee, origin, out);
+            if (callerMatch) symbol(callerKey, callerSignature, origin, out);
+            if (calleeMatch) symbol(calleeKey, calleeSignature, origin, out);
             return true;
         }
-        if (!emitted.add(origin + ":" + site + ":" + context.key(caller) + ":" + context.key(callee))) {
+        if (!emitted.add(origin + ":" + site + ":" + callerKey + ":" + calleeKey)) {
             return true;
         }
         if (out instanceof Output.OriginOutput output) {
@@ -164,13 +177,13 @@ final class CallSearch implements Closeable {
             if (file != null) output.sourceOrigin(unit, file, origin);
         }
         var prefix = file != null && line > 0 ? unit + "(" + file + ":" + line + "): " : unit + ": ";
-        out.println(prefix + context.signature(caller) + " -> " + context.signature(callee));
+        out.println(prefix + callerSignature + " -> " + calleeSignature);
         return true;
     }
 
-    private void symbol(JavaAnalysis context, ExecutableElement method, String origin, PrintWriter out) {
-        if (emitted.add(context.key(method)) && out instanceof Output.SymbolOutput output) {
-            output.symbol(SymbolKind.METHOD, context.signature(method), origin);
+    private void symbol(String key, String signature, String origin, PrintWriter out) {
+        if (emitted.add(key) && out instanceof Output.SymbolOutput output) {
+            output.symbol(SymbolKind.METHOD, signature, origin);
         }
     }
 
@@ -294,7 +307,8 @@ final class CallSearch implements Closeable {
             }
             if (lexical.flags().has(AccessFlag.SYNTHETIC) || lexical.methodName().stringValue().equals("<clinit>") || method.code().isEmpty()) continue;
             var code = method.code().orElseThrow();
-            ExecutableElement caller = null;
+            var callerKey = name + "#" + lexical.methodName().stringValue() + lexical.methodType().stringValue();
+            var visibility = options.visibility() != null ? options.visibility() : Visibility.LIBRARY;
             int bci = 0;
             for (var element : code) {
                 if (!(element instanceof Instruction instruction)) continue;
@@ -310,14 +324,21 @@ final class CallSearch implements Closeable {
                             bci += instruction.sizeInBytes();
                             continue;
                         }
-                        if (caller == null) caller = analysis.method(name, lexical.methodName().stringValue(), lexical.methodType().stringValue());
+                        var callerOwner = analysis.elements().getTypeElement(name);
+                        if (callerOwner == null) {
+                            throw new ToolException(2, "Cannot resolve caller type: " + name);
+                        }
+                        boolean callerMatch = incoming.contains(analysis.key(callee))
+                                && visibleOwner(analysis, callerOwner) && visibility.visible(lexical.flags());
+                        boolean calleeMatch = outgoing.contains(callerKey) && visible(analysis, callee, false);
                         var sourceFile = model.findAttribute(Attributes.sourceFile()).map(value -> value.sourceFile().stringValue()).orElse(null);
                         int packageEnd = internal.lastIndexOf('/');
                         var unit = packageEnd < 0 ? "" : internal.substring(0, packageEnd + 1).replace('/', '.');
                         unit += sourceFile == null ? internal.substring(packageEnd + 1).split("\\$")[0] : sourceFile.replaceFirst("\\.java$", "");
                         int line = line(code, bci);
-                        if (edge(analysis, caller, callee, unit, sourceFile, location, line,
-                                method.methodName().stringValue() + method.methodType().stringValue() + ":" + bci, false, out)
+                        if (edge(callerKey, compiledSignature(name, lexical), analysis.key(callee), analysis.signature(callee),
+                                callerMatch, calleeMatch, unit, sourceFile, location, line,
+                                method.methodName().stringValue() + method.methodType().stringValue() + ":" + bci, out)
                                 && enrichedSource()) {
                             int slash = internal.lastIndexOf('/');
                             var relative = (slash < 0 ? "" : internal.substring(0, slash + 1)) + sourceFile;
@@ -328,6 +349,24 @@ final class CallSearch implements Closeable {
                 bci += instruction.sizeInBytes();
             }
         }
+    }
+
+    private static String compiledSignature(String owner, MethodModel method) {
+        var name = method.methodName().stringValue();
+        var descriptor = MethodTypeDesc.ofDescriptor(method.methodType().stringValue());
+        return Arrays.stream(descriptor.parameterArray())
+                .map(type -> qualifiedType(type.descriptorString()))
+                .collect(Collectors.joining(",", owner + "." + (name.equals("<init>") ? "new" : name) + "(", ")"));
+    }
+
+    private static String qualifiedType(String descriptor) {
+        int dimensions = 0;
+        while (descriptor.charAt(dimensions) == '[') dimensions++;
+        var component = descriptor.substring(dimensions);
+        var name = component.startsWith("L")
+                ? component.substring(1, component.length() - 1).replace('/', '.').replace('$', '.')
+                : java.lang.constant.ClassDesc.ofDescriptor(component).displayName();
+        return name + "[]".repeat(dimensions);
     }
 
     private boolean enrichedSource() {

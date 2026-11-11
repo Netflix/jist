@@ -428,6 +428,64 @@ class CallQueryTest {
     }
 
     @Test
+    void compiledCallersDoNotRequireTheirParameterTypes(@TempDir Path directory) throws Exception {
+        var missing = directory.resolve("Missing.java");
+        Files.writeString(missing, "package optional; public class Missing {}\n");
+        var caller = directory.resolve("OptionalCaller.java");
+        Files.writeString(caller, """
+                package example;
+                import java.time.Clock;
+                public class OptionalCaller {
+                    public OptionalCaller(optional.Missing value) { Clock.systemUTC(); }
+                    public void run(optional.Missing[] value) { Clock.systemUTC(); }
+                    public void arrays(int[][] numbers, String[] names, java.util.Map.Entry[] entries) { Clock.systemUTC(); }
+                    public <T extends optional.Missing> void generic(T value) { Clock.systemUTC(); }
+                    public Runnable lambda(optional.Missing value) { return () -> Clock.systemUTC(); }
+                    private void hidden(optional.Missing value) { Clock.systemUTC(); }
+                }
+                """);
+        var classes = Files.createDirectories(directory.resolve("classes"));
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null, List.of("-g", "-d", classes.toString()), null,
+                    manager.getJavaFileObjects(missing, caller)).call());
+        }
+        Files.delete(classes.resolve("optional/Missing.class"));
+        var archive = directory.resolve("sources.jar");
+        try (var jar = new java.util.jar.JarOutputStream(Files.newOutputStream(archive))) {
+            jar.putNextEntry(new java.util.jar.JarEntry("example/OptionalCaller.java"));
+            Files.copy(caller, jar);
+            jar.closeEntry();
+        }
+        for (var sourcePath : List.of(directory.resolve("no-sources"), archive)) {
+            for (var detail : List.of("none", "definition")) {
+                var options = new ArrayList<>(List.of(
+                        "--limit-modules", "java.base", "--exclude-system-modules",
+                        "--class-path", classes.toString(), "--source-path", sourcePath.toString(),
+                        "--source", detail, "--callers", "java.time.Clock.systemUTC"));
+                var result = invoke(options);
+                assertEquals(0, result.code(), result.error());
+                for (var method : List.of("new(optional.Missing)", "run(optional.Missing[])",
+                        "generic(optional.Missing)", "lambda(optional.Missing)",
+                        "arrays(int[][],java.lang.String[],java.util.Map.Entry[])")) {
+                    assertTrue(result.output().contains("example.OptionalCaller." + method
+                            + " -> java.time.Clock.systemUTC()"), result.output());
+                }
+                assertFalse(result.output().contains("hidden("), result.output());
+                assertFalse(result.output().contains("lambda$"), result.output());
+                options.add("-l");
+                var listing = invoke(options);
+                assertSuccess(listing);
+                assertEquals(5, listing.output().lines().count(), listing.output());
+                options.addAll(List.of("--visibility", "all"));
+                var all = invoke(options);
+                assertSuccess(all);
+                assertEquals(6, all.output().lines().count(), all.output());
+            }
+        }
+    }
+
+    @Test
     void typeVariableErasureStillMatchesCompiledCalls(@TempDir Path directory) throws Exception {
         var fixture = compileMissingOverload(directory);
         var result = invoke(List.of(

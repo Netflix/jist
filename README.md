@@ -105,6 +105,8 @@ Diagnostics also remain on standard error, and `exitCode` matches the tool's ret
 
 `--release` applies javac's Java SE API signatures when Jist attributes project or attached source. It does not change the ClassFiles Jist searches or select historical JDK implementation source; when matching source is unavailable, Jist falls back to ClassFile signatures.
 
+Compiled caller identities and parameter signatures come from ClassFile descriptors, so a caller can be reported even when an optional parameter type is absent from the compilation context. Semantic resolution is still required for call targets and source attribution.
+
 A Java file on a directory source path takes precedence over matching ClassFiles, so searches reflect current project source without requiring compilation. Source archives remain attached source for their matching ClassFiles.
 
 `--exclude-path <path>` narrows searches by excluding input roots. Separate multiple paths with the platform path separator, as with `--class-path` and `--module-path`. Paths are matched by normalized absolute location, not by a recursive pattern. Excluded inputs remain available for type resolution, relationship targets, ancestor traversal, and source attachment.

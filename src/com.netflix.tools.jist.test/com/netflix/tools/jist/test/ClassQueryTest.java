@@ -577,6 +577,20 @@ class ClassQueryTest {
     }
 
     @Test
+    void simpleNameKeepsPackageResultsWithoutMatchingClassMembers(@TempDir Path directory) throws IOException {
+        var classes = Files.createDirectories(directory.resolve("classes"));
+        var file = classes.resolve("example/marker/Other.class");
+        Files.createDirectories(file.getParent());
+        Files.write(file, ClassFile.of().build(ClassDesc.of("example.marker.Other"),
+                builder -> builder.withFlags(ClassFile.ACC_PUBLIC)));
+
+        var result = run("--system", "none", "--class-path", classes.toString(), "--source", "none", "marker");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals("example.marker: package example.marker;\n", result.output());
+    }
+
+    @Test
     void sourceContextsCombineOrdinaryAndAttachedSource(@TempDir Path directory) throws IOException {
         var archive = directory.resolve("mixed.jar");
         var sourceArchive = directory.resolve("mixed-sources.jar");

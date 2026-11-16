@@ -104,7 +104,7 @@ final class DeclarationSearch {
         out.flush();
     }
 
-    private static final int CLASS_FILE_WINDOW = Runtime.getRuntime().availableProcessors();
+    private static final int CLASS_FILE_CAPACITY = Runtime.getRuntime().availableProcessors();
 
     @FunctionalInterface
     private interface PathConsumer {
@@ -134,6 +134,8 @@ final class DeclarationSearch {
         private final ExecutorService executor;
         private final ClassFileConsumer<T> consumer;
         private final Deque<Future<T>> pending = new ArrayDeque<>();
+        private final Semaphore capacity = new Semaphore(CLASS_FILE_CAPACITY);
+        private final Semaphore completed = new Semaphore(0);
         private boolean finished;
 
         OrderedClassReads(ExecutorService executor, ClassFileConsumer<T> consumer) {
@@ -142,21 +144,52 @@ final class DeclarationSearch {
         }
 
         void submit(Callable<T> reader) throws IOException, ToolException {
-            enqueue(executor.submit(reader));
+            reserve();
+            var future = new FutureTask<T>(() -> {
+                var value = reader.call();
+                if (value == null) {
+                    // Rejected entries retain no ClassFile while awaiting their ordered turn.
+                    capacity.release();
+                }
+                return value;
+            }) {
+                @Override
+                protected void done() {
+                    // Wake the producer only after the Future publishes its completed state.
+                    completed.release();
+                }
+            };
+            pending.addLast(future);
+            executor.execute(future);
         }
 
         void add(T value) throws IOException, ToolException {
+            if (value == null) {
+                return;
+            }
             if (pending.isEmpty()) {
                 consumer.accept(value);
             } else {
-                enqueue(CompletableFuture.completedFuture(value));
+                reserve();
+                pending.addLast(CompletableFuture.completedFuture(value));
             }
         }
 
-        private void enqueue(Future<T> future) throws IOException, ToolException {
-            pending.addLast(future);
-            if (pending.size() == CLASS_FILE_WINDOW) {
-                emitFirst();
+        private void reserve() throws IOException, ToolException {
+            // Reserve in submission order so later retained results cannot starve the oldest reader.
+            while (true) {
+                completed.drainPermits();
+                while (!pending.isEmpty() && pending.getFirst().isDone()) {
+                    emitFirst();
+                }
+                if (capacity.tryAcquire()) {
+                    return;
+                }
+                try {
+                    completed.acquire();
+                } catch (InterruptedException failure) {
+                    throw interruptedRead(failure);
+                }
             }
         }
 
@@ -168,17 +201,28 @@ final class DeclarationSearch {
         }
 
         private void emitFirst() throws IOException, ToolException {
-            consumer.accept(await(pending.removeFirst()));
+            var value = await(pending.removeFirst());
+            if (value != null) {
+                try {
+                    consumer.accept(value);
+                } finally {
+                    capacity.release();
+                }
+            }
+        }
+
+        private static InterruptedIOException interruptedRead(InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            var interrupted = new InterruptedIOException("Interrupted while reading ClassFiles");
+            interrupted.initCause(failure);
+            return interrupted;
         }
 
         private static <T> T await(Future<T> future) throws IOException {
             try {
                 return future.get();
             } catch (InterruptedException failure) {
-                Thread.currentThread().interrupt();
-                var interrupted = new InterruptedIOException("Interrupted while reading ClassFiles");
-                interrupted.initCause(failure);
-                throw interrupted;
+                throw interruptedRead(failure);
             } catch (ExecutionException failure) {
                 var cause = failure.getCause();
                 if (cause instanceof IOException exception) {
@@ -595,7 +639,20 @@ final class DeclarationSearch {
             return new ClassContext(model, location, binaryName, null, Set.of(), false, null);
         }
         var matches = matchCompiled ? contextMatches(model, binaryName, classFlags, Map.of(), opts, visibility) : null;
+        if (matches != null && matches.isEmpty()
+                && (simpleNameTarget(opts.target()) || opts.source() == SourceScope.NONE)
+                && !mayEmitPackage(opts, binaryName)) {
+            return null;
+        }
         return new ClassContext(model, location, binaryName, null, classFlags, true, matches);
+    }
+
+    private static boolean mayEmitPackage(Options opts, String binaryName) {
+        if (!opts.kinds().isEmpty() && !opts.listsPackages()) {
+            return false;
+        }
+        int packageEnd = binaryName.lastIndexOf('.');
+        return packageEnd > 0 && matchesListedPrefix(opts, binaryName.substring(0, packageEnd));
     }
 
     private void emitClassSourceContext(

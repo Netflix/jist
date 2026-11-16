@@ -267,34 +267,36 @@ final class DeclarationSearch {
         }
     }
 
+    private record DeclarationEntry(Path path, String name, int order) {
+        boolean directory() {
+            return order == 3;
+        }
+    }
+
     private static void walkFilesInDeclarationOrder(Path directory, PathConsumer consumer) throws IOException, ToolException {
-        List<Path> entries;
+        List<DeclarationEntry> entries;
         try (var children = Files.list(directory)) {
-            entries = children.sorted(Comparator.comparingInt(DeclarationSearch::declarationPathOrder)
-                    .thenComparing(path -> path.getFileName().toString()))
-                              .toList();
+            entries = children.map(DeclarationSearch::declarationEntry)
+                    .sorted(Comparator.comparingInt(DeclarationEntry::order).thenComparing(DeclarationEntry::name))
+                    .toList();
         }
         for (var entry : entries) {
-            if (Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
-                walkFilesInDeclarationOrder(entry, consumer);
-            } else if (Files.isRegularFile(entry)) {
-                consumer.accept(entry);
+            if (entry.directory()) {
+                walkFilesInDeclarationOrder(entry.path(), consumer);
+            } else if (Files.isRegularFile(entry.path())) {
+                consumer.accept(entry.path());
             }
         }
     }
 
-    private static int declarationPathOrder(Path path) {
-        if (Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) {
-            return 3;
-        }
+    private static DeclarationEntry declarationEntry(Path path) {
         var name = path.getFileName().toString();
-        if (name.equals("module-info.class") || name.equals("module-info.java")) {
-            return 0;
-        }
-        if (name.equals("package-info.class") || name.equals("package-info.java")) {
-            return 1;
-        }
-        return 2;
+        int order = Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) ? 3 : switch (name) {
+            case "module-info.class", "module-info.java" -> 0;
+            case "package-info.class", "package-info.java" -> 1;
+            default -> 2;
+        };
+        return new DeclarationEntry(path, name, order);
     }
 
     void listSourceContexts(Options opts, PrintWriter out) throws IOException, ToolException {
@@ -454,8 +456,11 @@ final class DeclarationSearch {
     }
 
     private boolean mayMatchCompiledResource(String resourceName) {
+        if (relationships == null) {
+            return true;
+        }
         var className = listedClassName(resourceName);
-        return relationships == null || className != null && relationships.mayMatchCompiledClass(className);
+        return className != null && relationships.mayMatchCompiledClass(className);
     }
 
     private static boolean visibleClassResource(String resourceName, String moduleName, Set<String> visiblePackages,

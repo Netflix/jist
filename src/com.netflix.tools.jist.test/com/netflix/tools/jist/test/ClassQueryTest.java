@@ -553,6 +553,30 @@ class ClassQueryTest {
     }
 
     @Test
+    void directoryDeclarationsPreserveMetadataAndTreeOrder(@TempDir Path directory) throws IOException {
+        var classes = Files.createDirectories(directory.resolve("classes"));
+        var packageDirectory = Files.createDirectories(classes.resolve("modular/api"));
+        for (var name : List.of("modular.api.a.Nested", "modular.api.Zulu", "modular.api.Alpha")) {
+            var file = classes.resolve(name.replace('.', '/') + ".class");
+            Files.createDirectories(file.getParent());
+            Files.write(file, ClassFile.of().build(ClassDesc.of(name), builder -> builder.withFlags(ClassFile.ACC_PUBLIC)));
+        }
+        Files.copy(MODULE_CLASSES.resolve("modular/api/package-info.class"), packageDirectory.resolve("package-info.class"));
+
+        var listed = run("--system", "none", "--class-path", classes.toString(), "-l", "--kind", "package", "--kind", "type");
+        var described = run("--system", "none", "--class-path", classes.toString(), "--source", "none",
+                "--kind", "package", "--kind", "type");
+
+        assertEquals(0, listed.exitCode(), listed.error());
+        assertEquals(List.of("package modular.api", "class modular.api.Alpha", "class modular.api.Zulu",
+                "package modular.api.a", "class modular.api.a.Nested"), listed.output().lines().toList());
+        assertEquals(0, described.exitCode(), described.error());
+        assertEquals(List.of("modular.api: @Deprecated package modular.api;", "modular.api.Alpha: public class Alpha {",
+                "modular.api.Zulu: public class Zulu {", "modular.api.a: package modular.api.a;",
+                "modular.api.a.Nested: public class Nested {"), described.output().lines().toList());
+    }
+
+    @Test
     void sourceContextsCombineOrdinaryAndAttachedSource(@TempDir Path directory) throws IOException {
         var archive = directory.resolve("mixed.jar");
         var sourceArchive = directory.resolve("mixed-sources.jar");

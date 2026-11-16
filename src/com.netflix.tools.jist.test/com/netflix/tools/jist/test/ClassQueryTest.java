@@ -553,6 +553,51 @@ class ClassQueryTest {
     }
 
     @Test
+    void sourceContextsCombineOrdinaryAndAttachedSource(@TempDir Path directory) throws IOException {
+        var archive = directory.resolve("mixed.jar");
+        var sourceArchive = directory.resolve("mixed-sources.jar");
+        var sourceDirectory = Files.createDirectories(directory.resolve("src/mixed"));
+        Files.writeString(sourceDirectory.resolve("Shared.java"), """
+                package mixed;
+                class Shadowed {
+                    public String marker() { return "current"; }
+                }
+                """);
+        try (var jar = new JarOutputStream(Files.newOutputStream(archive));
+                var sources = new JarOutputStream(Files.newOutputStream(sourceArchive))) {
+            for (var name : List.of("mixed.Shadowed", "external.Attached")) {
+                var sourceFile = name.equals("mixed.Shadowed") ? "Shared.java" : "Attached.java";
+                var bytes = ClassFile.of().build(ClassDesc.of(name), builder -> builder
+                        .withFlags(ClassFile.ACC_PUBLIC)
+                        .with(SourceFileAttribute.of(sourceFile))
+                        .withMethodBody("marker", MethodTypeDesc.of(ConstantDescs.CD_void), ClassFile.ACC_PUBLIC,
+                                code -> code.return_()));
+                jar.putNextEntry(new JarEntry(name.replace('.', '/') + ".class"));
+                jar.write(bytes);
+                jar.closeEntry();
+            }
+            sources.putNextEntry(new JarEntry("external/Attached.java"));
+            sources.write("""
+                    package external;
+                    public class Attached {
+                        public void marker() {}
+                    }
+                    """.getBytes(StandardCharsets.UTF_8));
+            sources.closeEntry();
+        }
+        var result = run("--system", "none", "--class-path", archive.toString(),
+                "--source-path", sourceDirectory.getParent() + File.pathSeparator + sourceArchive,
+                "--visibility", "all", "--kind", "method", "--source", "signature", "marker");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals("", result.error());
+        assertEquals(List.of(
+                "external.Attached(Attached.java:3):     public void marker() {}",
+                "mixed.Shared(Shared.java:3):     public String marker() { return \"current\"; }"),
+                result.output().lines().toList());
+    }
+
+    @Test
     void directorySourceContextIncludesAllOverloads() {
         var result = run(
                 "--system",

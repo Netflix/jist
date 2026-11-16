@@ -548,8 +548,12 @@ final class DeclarationSearch {
             Set<String> emittedPackages,
             Map<String, EnumeratedSource> parsedSources)
             throws IOException, ToolException {
-        var metadataKind = metadataKind(model, UsageSearch.displayClassName(model));
-        if (sources.hasOrdinarySource(model) || relationships != null && metadataKind != null) {
+        var internalName = model.thisClass().asInternalName();
+        var binaryName = internalName.replace('/', '.');
+        var className = binaryName.replace('$', '.');
+        var metadataKind = metadataKind(model, binaryName);
+        if (sources.mayHaveOrdinarySource(internalName) && sources.hasOrdinarySource(model)
+                || relationships != null && metadataKind != null) {
             return;
         }
         if (metadataKind == SymbolKind.MODULE) {
@@ -558,9 +562,8 @@ final class DeclarationSearch {
             }
             return;
         }
-        var packageName = model.thisClass()
-                               .asSymbol()
-                               .packageName();
+        int slash = internalName.lastIndexOf('/');
+        var packageName = slash < 0 ? "" : binaryName.substring(0, slash);
         if (!packageName.isEmpty()
                 && (opts.kinds().isEmpty() || opts.listsPackages())
                 && emittedPackages.add(packageName)
@@ -577,27 +580,27 @@ final class DeclarationSearch {
         if (metadataKind == SymbolKind.PACKAGE) {
             return;
         }
+        Set<AccessFlag> classFlags;
         try {
-            listedClassFlags(model);
+            classFlags = listedClassFlags(model);
         } catch (IllegalArgumentException _) {
             return;
         }
-        var className = UsageSearch.displayClassName(model);
+        var compiledMatches = simpleNameTarget(opts.target()) || relationships != null || opts.source() == SourceScope.NONE
+                ? contextMatches(model, binaryName, classFlags, Map.of(), opts, visibility)
+                : null;
         if (relationships != null
                 && (!relationships.mayMatchCompiledClass(className)
-                        || relationshipMatches(contextMatches(List.of(model), Map.of(), opts, visibility), false, true)
-                                .isEmpty())) {
+                        || relationshipMatches(compiledMatches, false, true).isEmpty())) {
             return;
         }
-        if (simpleNameTarget(opts.target()) && contextMatches(List.of(model), Map.of(), opts, visibility).isEmpty()) {
+        if (simpleNameTarget(opts.target()) && compiledMatches.isEmpty()) {
             return;
         }
         var unitName = ClassFileRenderer.compilationUnitName(model, className);
         var sourceFileName = model.findAttribute(Attributes.sourceFile())
                 .map(attribute -> attribute.sourceFile().stringValue())
                 .orElse(unitName.substring(unitName.lastIndexOf('.') + 1) + JAVA_EXT);
-        var internalName = model.thisClass().asInternalName();
-        int slash = internalName.lastIndexOf('/');
         var relativePath = (slash < 0 ? "" : internalName.substring(0, slash + 1)) + sourceFileName;
         var source = opts.source() == SourceScope.NONE ? null : sources.find(relativePath, classLocation, internalName + CLASS_EXT);
         final SymbolSource symbolSource;
@@ -629,16 +632,13 @@ final class DeclarationSearch {
                             || opts.source() == SourceScope.BODY
                             || opts.source() == SourceScope.UNIT
                             || opts.source().conciseDeclaration()
-                    ? contextMatches(
-                            List.of(model),
-                            parsed.structure().attribution(),
-                            opts,
-                            visibility)
+                    ? contextMatches(model, binaryName, classFlags, parsed.structure().attribution(), opts, visibility)
                     : contextMatches(parsed.structure(), opts);
         } else {
             symbolSource = new SymbolSource(classLocation, null, unitName, sourceFileName, null,
                     Map.of(), List.of(model));
-            matches = contextMatches(List.of(model), Map.of(), opts, visibility);
+            matches = compiledMatches != null ? compiledMatches
+                    : contextMatches(model, binaryName, classFlags, Map.of(), opts, visibility);
         }
         if (!matches.isEmpty()) {
             printSymbolContext(symbolSource, matches, opts, out);
@@ -2331,55 +2331,65 @@ final class DeclarationSearch {
     private static List<ContextMatch> contextMatches(List<ClassModel> classes, Map<String, Attribution> attribution, Options opts,
             Visibility visibility) {
         var selected = opts.kinds().isEmpty() ? opts.withKinds(defaultKinds()) : opts;
+        var matches = new ArrayList<ContextMatch>();
+        for (var model : classes) {
+            matches.addAll(contextMatches(model, attributionKey(model),
+                    selected.listsType(model) ? listedClassFlags(model) : Set.of(), attribution, selected, visibility));
+        }
+        return matches;
+    }
+
+    private static List<ContextMatch> contextMatches(ClassModel model, String binaryName, Set<AccessFlag> classFlags,
+            Map<String, Attribution> attribution, Options opts, Visibility visibility) {
+        var selected = opts.kinds().isEmpty() ? opts.withKinds(defaultKinds()) : opts;
         var simpleTarget = simpleNameTarget(selected.target()) && selected.target().indexOf('*') < 0 ? selected.target() : null;
         var methodTarget = "new".equals(simpleTarget) ? ConstantDescs.INIT_NAME : simpleTarget;
         var matches = new ArrayList<ContextMatch>();
-        for (var model : classes) {
-            var owner = attributionKey(model).replace('$', '.');
-            if (selected.listsType(model) && visibility.visible(listedClassFlags(model)) && matchesListedPrefix(selected, owner)) {
-                matches.add(new ContextMatch(owner, owner, SymbolKind.classKind(model), owner,
-                        attribution.getOrDefault(owner, Attribution.EMPTY)));
-            }
-            if (selected.listsFields()) {
-                for (var field : model.fields()) {
-                    if (simpleTarget != null && !field.fieldName().equalsString(simpleTarget)) {
-                        continue;
-                    }
-                    if (field.flags().has(AccessFlag.SYNTHETIC) || !visibility.visible(field.flags())) {
-                        continue;
-                    }
-                    var symbol = owner + "." + field.fieldName().stringValue();
-                    if (matchesListedPrefix(selected, symbol)) {
-                        matches.add(new ContextMatch(attributionKey(model, field), symbol, SymbolKind.FIELD, symbol,
-                                attribution.getOrDefault(attributionKey(model, field), Attribution.EMPTY)));
-                    }
+        var owner = binaryName.replace('$', '.');
+        if (selected.listsType(model) && visibility.visible(classFlags) && matchesListedPrefix(selected, owner)) {
+            matches.add(new ContextMatch(owner, owner, SymbolKind.classKind(model), owner,
+                    attribution.getOrDefault(owner, Attribution.EMPTY)));
+        }
+        if (selected.listsFields()) {
+            for (var field : model.fields()) {
+                if (simpleTarget != null && !field.fieldName().equalsString(simpleTarget)) {
+                    continue;
+                }
+                if (field.flags().has(AccessFlag.SYNTHETIC) || !visibility.visible(field.flags())) {
+                    continue;
+                }
+                var symbol = owner + "." + field.fieldName().stringValue();
+                if (matchesListedPrefix(selected, symbol)) {
+                    var key = binaryName + "#" + field.fieldName().stringValue();
+                    matches.add(new ContextMatch(key, symbol, SymbolKind.FIELD, symbol,
+                            attribution.getOrDefault(key, Attribution.EMPTY)));
                 }
             }
-            if (selected.listsMethods()) {
-                var ordinals = new HashMap<String, Integer>();
-                for (var method : model.methods()) {
-                    if (methodTarget != null && !method.methodName().equalsString(methodTarget)) {
-                        continue;
-                    }
-                    var name = method.methodName().stringValue();
-                    var keyName = ConstantDescs.INIT_NAME.equals(name) ? "<init>" : name;
-                    int ordinal = ordinals.merge(keyName, 0, Integer::sum);
-                    ordinals.put(keyName, ordinal + 1);
-                    if (method.flags().has(AccessFlag.SYNTHETIC)
-                            || method.flags().has(AccessFlag.BRIDGE)
-                            || !visibility.visible(method.flags())
-                            || ConstantDescs.CLASS_INIT_NAME.equals(name)) {
-                        continue;
-                    }
-                    if (model.flags().has(AccessFlag.ENUM) && (name.equals("values") || name.equals("valueOf"))) {
-                        continue;
-                    }
-                    var publicName = ConstantDescs.INIT_NAME.equals(name) ? "new" : name;
-                    var symbol = owner + "." + publicName;
-                    if (matchesListedPrefix(selected, symbol)) {
-                        matches.add(new ContextMatch(attributionKey(owner, keyName, ordinal), symbol, SymbolKind.METHOD, listedMethodSignature(owner, method),
-                                attribution.getOrDefault(attributionKey(attributionKey(model), keyName, ordinal), Attribution.EMPTY)));
-                    }
+        }
+        if (selected.listsMethods()) {
+            var ordinals = new HashMap<String, Integer>();
+            for (var method : model.methods()) {
+                if (methodTarget != null && !method.methodName().equalsString(methodTarget)) {
+                    continue;
+                }
+                var name = method.methodName().stringValue();
+                var keyName = ConstantDescs.INIT_NAME.equals(name) ? "<init>" : name;
+                int ordinal = ordinals.merge(keyName, 0, Integer::sum);
+                ordinals.put(keyName, ordinal + 1);
+                if (method.flags().has(AccessFlag.SYNTHETIC)
+                        || method.flags().has(AccessFlag.BRIDGE)
+                        || !visibility.visible(method.flags())
+                        || ConstantDescs.CLASS_INIT_NAME.equals(name)) {
+                    continue;
+                }
+                if (model.flags().has(AccessFlag.ENUM) && (name.equals("values") || name.equals("valueOf"))) {
+                    continue;
+                }
+                var publicName = ConstantDescs.INIT_NAME.equals(name) ? "new" : name;
+                var symbol = owner + "." + publicName;
+                if (matchesListedPrefix(selected, symbol)) {
+                    matches.add(new ContextMatch(attributionKey(owner, keyName, ordinal), symbol, SymbolKind.METHOD, listedMethodSignature(owner, method),
+                            attribution.getOrDefault(attributionKey(binaryName, keyName, ordinal), Attribution.EMPTY)));
                 }
             }
         }

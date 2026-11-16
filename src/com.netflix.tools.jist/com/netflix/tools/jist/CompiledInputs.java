@@ -94,6 +94,9 @@ final class CompiledInputs {
                 completed.drainPermits();
                 while (!pending.isEmpty() && pending.getFirst().isDone()) {
                     emitFirst();
+                    if (capacity.tryAcquire()) {
+                        return;
+                    }
                 }
                 if (capacity.tryAcquire()) {
                     return;

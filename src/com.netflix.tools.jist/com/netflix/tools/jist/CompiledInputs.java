@@ -135,6 +135,7 @@ final class CompiledInputs {
             }
         } else if (Files.isRegularFile(path)) {
             try (var jar = ClassPaths.openArchive(path, true)) {
+                var origin = "jar:" + path.toAbsolutePath().normalize().toUri() + "!/";
                 var iterator = jar.versionedStream()
                         .filter(entry -> !entry.isDirectory() && entry.getName().endsWith(".class"))
                         .iterator();
@@ -146,7 +147,7 @@ final class CompiledInputs {
                     try (var input = jar.getInputStream(entry)) {
                         var bytes = reader.read(input, entry.getSize());
                         if (bytes != null) {
-                            consumer.accept(bytes, () -> "jar:" + path.toAbsolutePath().normalize().toUri() + "!/" + entry.getRealName());
+                            consumer.accept(bytes, () -> origin + entry.getRealName());
                         }
                     }
                 }

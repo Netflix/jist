@@ -113,8 +113,17 @@ final class CallSearch implements Closeable {
     void search(PrintWriter out) throws IOException, ToolException {
         try (var sources = environment.sources()) {
             sources.prepareOrdinarySources();
+            var needles = new HashSet<String>();
+            for (var key : incoming) {
+                int separator = key.indexOf('#');
+                var name = key.substring(separator + 1, key.indexOf('('));
+                needles.add(name.equals("<init>") ? key.substring(0, separator).replace('.', '/') : name);
+            }
+            for (var key : outgoing) {
+                needles.add(key.substring(0, key.indexOf('#')).replace('.', '/'));
+            }
             CompiledInputs.scan(options, environment, CompiledInputs::readAllBytes,
-                    (bytes, location) -> compiled(bytes, location.get(), sources, out));
+                    (bytes, location) -> compiled(bytes, location, needles, sources, out));
             var candidates = new LinkedHashMap<URI, SourceCandidate>();
             for (var root : sources.explicitPaths()) {
                 if (!environment.searches(root)) continue;
@@ -271,14 +280,17 @@ final class CallSearch implements Closeable {
 
     private record SourceCandidate(Path file, byte[] bytes) {}
 
-    private void compiled(byte[] bytes, String location, SourceLookup sources, PrintWriter out) throws IOException, ToolException {
+    private void compiled(byte[] bytes, Supplier<String> origin, Set<String> needles, SourceLookup sources, PrintWriter out)
+            throws IOException, ToolException {
         var constants = new String(bytes, StandardCharsets.ISO_8859_1);
-        boolean mentionsCallee = incoming.stream().anyMatch(key -> {
-            var name = key.substring(key.indexOf('#') + 1, key.indexOf('('));
-            return constants.contains(name.equals("<init>") ? key.substring(0, key.indexOf('#')).replace('.', '/') : name);
-        });
-        boolean mentionsCaller = outgoing.stream().anyMatch(key -> constants.contains(key.substring(0, key.indexOf('#')).replace('.', '/')));
-        if (!mentionsCallee && !mentionsCaller) return;
+        boolean candidate = false;
+        for (var needle : needles) {
+            if (constants.contains(needle)) {
+                candidate = true;
+                break;
+            }
+        }
+        if (!candidate) return;
         var model = ClassFile.of().parse(bytes);
         var internal = model.thisClass().asInternalName();
         var name = SearchEnvironment.listedClassName(internal + ".class");
@@ -297,6 +309,7 @@ final class CallSearch implements Closeable {
                 }
             }
         }
+        String location = null;
         for (var method : model.methods()) {
             var lexical = method;
             var visited = new HashSet<MethodModel>();
@@ -336,6 +349,9 @@ final class CallSearch implements Closeable {
                         var unit = packageEnd < 0 ? "" : internal.substring(0, packageEnd + 1).replace('/', '.');
                         unit += sourceFile == null ? internal.substring(packageEnd + 1).split("\\$")[0] : sourceFile.replaceFirst("\\.java$", "");
                         int line = line(code, bci);
+                        if (location == null) {
+                            location = origin.get();
+                        }
                         if (edge(callerKey, compiledSignature(name, lexical), analysis.key(callee), analysis.signature(callee),
                                 callerMatch, calleeMatch, unit, sourceFile, location, line,
                                 method.methodName().stringValue() + method.methodType().stringValue() + ":" + bci, out)

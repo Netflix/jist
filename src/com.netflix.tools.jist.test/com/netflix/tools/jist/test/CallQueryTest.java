@@ -254,13 +254,14 @@ class CallQueryTest {
     @Test
     void largeCompiledInputsPreserveCallEdgesAndOrigins(@TempDir Path directory) throws Exception {
         var source = directory.resolve("LargeCaller.java");
-        var classes = Files.createDirectories(directory.resolve("classes"));
+        var classes = Files.createDirectories(directory.resolve("class files # %"));
         Files.writeString(source, """
                 package example;
                 public class LargeCaller {
                     public static final String PADDING = "%s";
                     public static void target() {}
                     public void run() { target(); }
+                    public void again() { target(); }
                 }
                 """.formatted("x".repeat(20_000)));
         var compiler = ToolProvider.getSystemJavaCompiler();
@@ -270,7 +271,7 @@ class CallQueryTest {
         }
         var classFile = classes.resolve("example/LargeCaller.class");
         assertTrue(Files.size(classFile) > 20_000);
-        var archive = directory.resolve("classes.jar");
+        var archive = directory.resolve("classes with spaces # %.jar");
         try (var jar = new java.util.jar.JarOutputStream(Files.newOutputStream(archive))) {
             jar.putNextEntry(new java.util.jar.JarEntry("example/LargeCaller.class"));
             Files.copy(classFile, jar);
@@ -283,13 +284,16 @@ class CallQueryTest {
                     "--callers", "example.LargeCaller.target"));
             assertSuccess(result);
             var rows = Json.parse(result.output()).get("results").asList();
-            assertEquals(1, rows.size(), result.output());
-            var row = rows.getFirst();
-            assertTrue(row.get("text").asString().contains(
+            assertEquals(2, rows.size(), result.output());
+            assertTrue(rows.getFirst().get("text").asString().contains(
                     "example.LargeCaller.run() -> example.LargeCaller.target()"), result.output());
+            assertTrue(rows.getLast().get("text").asString().contains(
+                    "example.LargeCaller.again() -> example.LargeCaller.target()"), result.output());
             var origin = input.equals(classes) ? classFile.toString()
                     : "jar:" + archive.toUri() + "!/example/LargeCaller.class";
-            assertEquals(origin, row.get("origin").get("location").asString());
+            for (var row : rows) {
+                assertEquals(origin, row.get("origin").get("location").asString());
+            }
         }
     }
 

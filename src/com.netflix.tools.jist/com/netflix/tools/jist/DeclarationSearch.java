@@ -230,22 +230,40 @@ final class DeclarationSearch {
         }
     }
 
-    private record ClassContext(ClassModel model, String location) {}
+    private record ClassContext(
+            ClassModel model,
+            String location,
+            String binaryName,
+            SymbolKind metadataKind,
+            Set<AccessFlag> classFlags,
+            boolean validClass,
+            List<ContextMatch> matches) {}
 
     private final class SourceClassFiles extends OrderedClassReads<ClassContext> {
+        private final Options options;
+        private final Visibility visibility;
+        private final SourceLookup sources;
+        private final boolean matchCompiled;
+
         SourceClassFiles(Options opts, PrintWriter out, Visibility visibility, SourceLookup sources,
                          Set<String> emittedSources, Set<String> emittedPackages,
                          Map<String, EnumeratedSource> parsedSources, ExecutorService executor) {
-            super(executor, context -> emitClassSourceContext(opts, out, context.model(), context.location(),
+            super(executor, context -> emitClassSourceContext(opts, out, context,
                     visibility, sources, emittedSources, emittedPackages, parsedSources));
+            this.options = opts;
+            this.visibility = visibility;
+            this.sources = sources;
+            this.matchCompiled = simpleNameTarget(opts.target()) || relationships != null || opts.source() == SourceScope.NONE;
         }
 
         void submit(Path file, String location) throws IOException, ToolException {
-            submit(() -> new ClassContext(CLASS_FILE.parse(readClassFile(file)), location));
+            submit(() -> prepareClassSourceContext(options, CLASS_FILE.parse(readClassFile(file)), location,
+                    visibility, sources, matchCompiled));
         }
 
         void submit(Path file, String location, long size) throws IOException, ToolException {
-            submit(() -> new ClassContext(CLASS_FILE.parse(readClassFile(file, size)), location));
+            submit(() -> prepareClassSourceContext(options, CLASS_FILE.parse(readClassFile(file, size)), location,
+                    visibility, sources, matchCompiled));
         }
     }
 
@@ -548,12 +566,51 @@ final class DeclarationSearch {
             Set<String> emittedPackages,
             Map<String, EnumeratedSource> parsedSources)
             throws IOException, ToolException {
+        emitClassSourceContext(opts, out, prepareClassSourceContext(opts, model, classLocation, visibility, sources,
+                        simpleNameTarget(opts.target()) || relationships != null || opts.source() == SourceScope.NONE),
+                visibility, sources, emittedSources, emittedPackages, parsedSources);
+    }
+
+    private static ClassContext prepareClassSourceContext(Options opts, ClassModel model, String location,
+            Visibility visibility, SourceLookup sources, boolean matchCompiled) {
         var internalName = model.thisClass().asInternalName();
+        // Scans populate the ordinary-source maps before submitting work; workers only read them.
+        if (sources.mayHaveOrdinarySource(internalName) && sources.hasOrdinarySource(model)) {
+            return null;
+        }
         var binaryName = internalName.replace('/', '.');
-        var className = binaryName.replace('$', '.');
         var metadataKind = metadataKind(model, binaryName);
-        if (sources.mayHaveOrdinarySource(internalName) && sources.hasOrdinarySource(model)
-                || relationships != null && metadataKind != null) {
+        if (metadataKind != null) {
+            return new ClassContext(model, location, binaryName, metadataKind, Set.of(), true, null);
+        }
+        Set<AccessFlag> classFlags;
+        try {
+            classFlags = listedClassFlags(model);
+        } catch (IllegalArgumentException _) {
+            return new ClassContext(model, location, binaryName, null, Set.of(), false, null);
+        }
+        var matches = matchCompiled ? contextMatches(model, binaryName, classFlags, Map.of(), opts, visibility) : null;
+        return new ClassContext(model, location, binaryName, null, classFlags, true, matches);
+    }
+
+    private void emitClassSourceContext(
+            Options opts,
+            PrintWriter out,
+            ClassContext context,
+            Visibility visibility,
+            SourceLookup sources,
+            Set<String> emittedSources,
+            Set<String> emittedPackages,
+            Map<String, EnumeratedSource> parsedSources)
+            throws IOException, ToolException {
+        if (context == null) {
+            return;
+        }
+        var model = context.model();
+        var classLocation = context.location();
+        var binaryName = context.binaryName();
+        var metadataKind = context.metadataKind();
+        if (relationships != null && metadataKind != null) {
             return;
         }
         if (metadataKind == SymbolKind.MODULE) {
@@ -562,8 +619,8 @@ final class DeclarationSearch {
             }
             return;
         }
-        int slash = internalName.lastIndexOf('/');
-        var packageName = slash < 0 ? "" : binaryName.substring(0, slash);
+        int packageEnd = binaryName.lastIndexOf('.');
+        var packageName = packageEnd < 0 ? "" : binaryName.substring(0, packageEnd);
         if (!packageName.isEmpty()
                 && (opts.kinds().isEmpty() || opts.listsPackages())
                 && emittedPackages.add(packageName)
@@ -580,27 +637,26 @@ final class DeclarationSearch {
         if (metadataKind == SymbolKind.PACKAGE) {
             return;
         }
-        Set<AccessFlag> classFlags;
-        try {
-            classFlags = listedClassFlags(model);
-        } catch (IllegalArgumentException _) {
+        if (!context.validClass()) {
             return;
         }
-        var compiledMatches = simpleNameTarget(opts.target()) || relationships != null || opts.source() == SourceScope.NONE
-                ? contextMatches(model, binaryName, classFlags, Map.of(), opts, visibility)
-                : null;
+        var classFlags = context.classFlags();
+        var compiledMatches = context.matches();
         if (relationships != null
-                && (!relationships.mayMatchCompiledClass(className)
+                && (!relationships.mayMatchCompiledClass(binaryName.replace('$', '.'))
                         || relationshipMatches(compiledMatches, false, true).isEmpty())) {
             return;
         }
         if (simpleNameTarget(opts.target()) && compiledMatches.isEmpty()) {
             return;
         }
+        var className = binaryName.replace('$', '.');
         var unitName = ClassFileRenderer.compilationUnitName(model, className);
         var sourceFileName = model.findAttribute(Attributes.sourceFile())
                 .map(attribute -> attribute.sourceFile().stringValue())
                 .orElse(unitName.substring(unitName.lastIndexOf('.') + 1) + JAVA_EXT);
+        var internalName = model.thisClass().asInternalName();
+        int slash = internalName.lastIndexOf('/');
         var relativePath = (slash < 0 ? "" : internalName.substring(0, slash + 1)) + sourceFileName;
         var source = opts.source() == SourceScope.NONE ? null : sources.find(relativePath, classLocation, internalName + CLASS_EXT);
         final SymbolSource symbolSource;

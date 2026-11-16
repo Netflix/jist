@@ -1253,6 +1253,34 @@ class ClassQueryTest {
     }
 
     @Test
+    void simpleMethodNamesPreserveArchiveOverloadsAndConstructors(@TempDir Path directory) throws IOException {
+        var archive = directory.resolve("members.jar");
+        try (var jar = new JarOutputStream(Files.newOutputStream(archive))) {
+            for (var name : List.of("Example", "Overloads")) {
+                jar.putNextEntry(new JarEntry("com/example/" + name + ".class"));
+                Files.copy(ROOT.resolve("classes/com/example/" + name + ".class"), jar);
+                jar.closeEntry();
+            }
+        }
+        var methods = run("--system", "none", "--class-path", archive.toString(),
+                "--source", "none", "--visibility", "all", "-l", "run");
+        assertEquals(0, methods.exitCode(), methods.error());
+        assertEquals("", methods.error());
+        assertEquals(List.of(
+                "method com.example.Example.run(int)",
+                "method com.example.Overloads.run()",
+                "method com.example.Overloads.run(java.lang.String)",
+                "method com.example.Overloads.run(int)"), methods.output().lines().toList());
+
+        var constructors = run("--system", "none", "--class-path", archive.toString(),
+                "--source", "none", "--visibility", "all", "-l", "new");
+        assertEquals(0, constructors.exitCode(), constructors.error());
+        assertEquals("", constructors.error());
+        assertEquals(List.of("method com.example.Example.new()", "method com.example.Overloads.new()"),
+                constructors.output().lines().toList());
+    }
+
+    @Test
     void simpleNameShowOriginIdentifiesClassFileFallback() {
         var result = run("--system", "none", "--class-path", JAR.toString(), "--source",
                 "none", "--show-origin", "Example");

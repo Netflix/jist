@@ -384,18 +384,14 @@ final class DeclarationSearch {
                             if (!emittedPackages.contains(packageName)) {
                                 var packageInfo = jar.getJarEntry(jarEntry.getName().substring(0, slash + 1) + "package-info.class");
                                 if (packageInfo != null && filter.test(packageInfo.getName()) && visibleClassResource(packageInfo.getName(), moduleName, visiblePackages, opts)) {
-                                    try (var input = jar.getInputStream(packageInfo)) {
-                                        emitClassSourceContext(opts, out, CLASS_FILE.parse(input.readAllBytes()), origin + packageInfo.getRealName(),
-                                                visibility, sources, emittedSources, emittedPackages, parsedSources);
-                                    }
+                                    emitClassSourceContext(opts, out, CLASS_FILE.parse(readJarEntry(jar, packageInfo)), origin + packageInfo.getRealName(),
+                                            visibility, sources, emittedSources, emittedPackages, parsedSources);
                                 }
                             }
                         }
                     }
-                    try (var input = jar.getInputStream(jarEntry)) {
-                        emitClassSourceContext(opts, out, CLASS_FILE.parse(input.readAllBytes()), origin + jarEntry.getRealName(),
-                                visibility, sources, emittedSources, emittedPackages, parsedSources);
-                    }
+                    emitClassSourceContext(opts, out, CLASS_FILE.parse(readJarEntry(jar, jarEntry)), origin + jarEntry.getRealName(),
+                            visibility, sources, emittedSources, emittedPackages, parsedSources);
                 }
             }
         }
@@ -2320,6 +2316,8 @@ final class DeclarationSearch {
     private static List<ContextMatch> contextMatches(List<ClassModel> classes, Map<String, Attribution> attribution, Options opts,
             Visibility visibility) {
         var selected = opts.kinds().isEmpty() ? opts.withKinds(defaultKinds()) : opts;
+        var simpleTarget = simpleNameTarget(selected.target()) && selected.target().indexOf('*') < 0 ? selected.target() : null;
+        var methodTarget = "new".equals(simpleTarget) ? ConstantDescs.INIT_NAME : simpleTarget;
         var matches = new ArrayList<ContextMatch>();
         for (var model : classes) {
             var owner = attributionKey(model).replace('$', '.');
@@ -2329,6 +2327,9 @@ final class DeclarationSearch {
             }
             if (selected.listsFields()) {
                 for (var field : model.fields()) {
+                    if (simpleTarget != null && !field.fieldName().equalsString(simpleTarget)) {
+                        continue;
+                    }
                     if (field.flags().has(AccessFlag.SYNTHETIC) || !visibility.visible(field.flags())) {
                         continue;
                     }
@@ -2342,6 +2343,9 @@ final class DeclarationSearch {
             if (selected.listsMethods()) {
                 var ordinals = new HashMap<String, Integer>();
                 for (var method : model.methods()) {
+                    if (methodTarget != null && !method.methodName().equalsString(methodTarget)) {
+                        continue;
+                    }
                     var name = method.methodName().stringValue();
                     var keyName = ConstantDescs.INIT_NAME.equals(name) ? "<init>" : name;
                     int ordinal = ordinals.merge(keyName, 0, Integer::sum);

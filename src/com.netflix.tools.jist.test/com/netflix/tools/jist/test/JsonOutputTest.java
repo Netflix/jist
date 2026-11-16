@@ -47,6 +47,37 @@ class JsonOutputTest {
     }
 
     @Test
+    void attachedSystemSourceRetainsModuleIdentity(@TempDir Path directory) throws Exception {
+        var sources = directory.resolve("sources.zip");
+        try (var output = new java.util.jar.JarOutputStream(Files.newOutputStream(sources))) {
+            for (var entry : List.of("java.base/module-info.java", "java.base/java/lang/String.java")) {
+                output.putNextEntry(new java.util.jar.JarEntry(entry));
+                output.write((entry.endsWith("module-info.java") ? "module java.base {}\n"
+                        : "package java.lang;\npublic final class String {}\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                output.closeEntry();
+            }
+        }
+        for (var kind : List.of("module", "type")) {
+            var target = kind.equals("module") ? "java.base" : "java.lang.String";
+            var result = run("--source-path", sources.toString(), "--kind", kind, "--source", "unit", "--show-origin", target);
+            assertEquals(0, result.code(), result.error());
+            assertEquals("", result.error());
+            var rows = Json.parse(result.output()).get("results").asList();
+            assertFalse(rows.isEmpty());
+            for (var row : rows) {
+                var origin = row.get("origin");
+                assertEquals("system", origin.get("kind").asString());
+                assertEquals("java.base", origin.get("module").asString());
+                assertEquals(Path.of(System.getProperty("java.home")).toAbsolutePath().normalize().toString(), origin.get("system").asString());
+                assertTrue(origin.get("location").asString().contains("sources.zip!/"), result.output());
+                assertTrue(origin.get("resource").asString().endsWith(".class"));
+                var prefix = "java.base@" + origin.get("version").asString() + "/";
+                assertTrue(row.get("text").asString().startsWith(prefix), result.output());
+            }
+        }
+    }
+
+    @Test
     void missingTargetsHaveDistinctDiagnostics() {
         for (var arguments : List.of(
                 List.of("missing.Type"),

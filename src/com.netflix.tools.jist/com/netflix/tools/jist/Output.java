@@ -553,7 +553,8 @@ final class Output {
                     ? sourceOrigin
                     : null;
             var origin = source != null ? source : classOrigins.get(unit);
-            var system = systemOrigin(origin);
+            var classLocation = classOrigins.getOrDefault(unit, origin);
+            var system = systemOrigin(classLocation);
             var displayedUnit = showOrigin && system != null
                     ? system + "/" + unit
                     : unit;
@@ -566,7 +567,7 @@ final class Output {
                     + ")";
             var displayedGroup = displayedUnit + "(" + path + ")";
             int numericLine = Integer.parseInt(lineNumber);
-            resultOrigin(origin, sourceFile, numericLine);
+            resultOrigin(origin, sourceFile, numericLine, classLocation);
             var rowHighlights = unit.equals(highlightUnit) && sourceFile.equals(highlightFile) && numericLine == highlightLine
                     ? highlights
                     : List.<SourceHighlight>of();
@@ -684,12 +685,16 @@ final class Output {
         }
 
         private void resultOrigin(String location, String source, Integer line) {
+            resultOrigin(location, source, line, location);
+        }
+
+        private void resultOrigin(String location, String source, Integer line, String classLocation) {
             if (!(delegate instanceof ResultOutput output) || location == null) {
                 return;
             }
-            var module = SearchEnvironment.jrtModuleName(location);
+            var module = SearchEnvironment.jrtModuleName(classLocation);
             if (module != null) {
-                var path = URI.create(location).getPath();
+                var path = URI.create(classLocation).getPath();
                 int resourceStart = path.indexOf('/', 1) + 1;
                 output.resultOrigin(
                         new ResultOrigin(

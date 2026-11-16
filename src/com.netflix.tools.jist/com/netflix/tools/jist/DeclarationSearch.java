@@ -594,6 +594,9 @@ final class DeclarationSearch {
             }
         }
         if (!printListSymbol(out, SymbolKind.MODULE, moduleName, classLocation)) {
+            if (out instanceof OriginOutput output) {
+                output.classOrigin(moduleName, classLocation);
+            }
             warnSourceUnavailable(out, moduleName);
             out.println(moduleName + ": " + renderModuleDeclaration(model));
         }
@@ -636,6 +639,9 @@ final class DeclarationSearch {
                    .append(packageName)
                    .append(';');
         if (!printListSymbol(out, SymbolKind.PACKAGE, packageName, classLocation)) {
+            if (out instanceof OriginOutput output) {
+                output.classOrigin(packageName, classLocation);
+            }
             warnSourceUnavailable(out, packageName);
             out.println(packageName + ": " + declaration);
         }

@@ -130,8 +130,9 @@ final class ClassHierarchy implements Closeable {
         }
         var matches = new HashSet<String>();
         var memo = new HashMap<String, Boolean>();
+        var visiting = new HashSet<String>();
         for (var candidate : types.keySet()) {
-            if (reachesSource(candidate, memo, new HashSet<>())) {
+            if (reachesSource(candidate, memo, visiting)) {
                 matches.add(candidate);
             }
         }
@@ -165,12 +166,13 @@ final class ClassHierarchy implements Closeable {
     private Set<String> descendants(Set<String> targets, boolean direct, boolean includeTargets) throws IOException, ToolException {
         var matches = new LinkedHashSet<String>();
         var memo = new HashMap<String, Boolean>();
+        var visiting = new HashSet<String>();
         for (var candidate : types.keySet()) {
             if ((includeTargets || !targets.contains(candidate))
                     && (direct ? types.get(candidate)
                                       .stream()
                                       .anyMatch(targets::contains)
-                            : reaches(candidate, targets, memo, new HashSet<>()))) {
+                            : reaches(candidate, targets, memo, visiting))) {
                 matches.add(candidate);
             }
         }

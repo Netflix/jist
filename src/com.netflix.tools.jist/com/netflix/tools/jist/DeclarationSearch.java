@@ -1139,7 +1139,7 @@ final class DeclarationSearch {
                         }
                         var classFile = archive.getPath(jarEntry.getRealName());
                         classes.submit(jarEntry.getName(), className,
-                                opts.requiresClassModel(className) ? () -> CLASS_FILE.parse(readClassFile(classFile)) : null);
+                                opts.requiresClassModel(className) ? () -> CLASS_FILE.parse(readClassFile(classFile, jarEntry.getSize())) : null);
                     }
                     classes.finish();
                 }
@@ -1206,7 +1206,7 @@ final class DeclarationSearch {
                         }
                         var classFile = archive.getPath(jarEntry.getRealName());
                         classes.submit(jarEntry.getName(), className,
-                                opts.requiresClassModel(className) ? () -> CLASS_FILE.parse(readClassFile(classFile)) : null);
+                                opts.requiresClassModel(className) ? () -> CLASS_FILE.parse(readClassFile(classFile, jarEntry.getSize())) : null);
                     }
                     classes.finish();
                 }
@@ -1438,9 +1438,8 @@ final class DeclarationSearch {
                 var field = model.fields().get(i);
                 if (!field.flags().has(AccessFlag.SYNTHETIC) && visibility.visible(field.flags()) && firstFieldNamed(model, i,
                         field.fieldName().stringValue())) {
-                    var symbol = listedMemberTarget(opts, className,
-                            field.fieldName().stringValue());
-                    if (matchesListedPrefix(opts, symbol)) {
+                    var symbol = matchingMemberSymbol(opts, className, field.fieldName().stringValue());
+                    if (symbol != null) {
                         printListedSymbol(out, opts, SymbolKind.FIELD, unitName, symbol,
                                 listOnly ? null : renderFieldDeclaration(field));
                     }
@@ -1458,8 +1457,8 @@ final class DeclarationSearch {
                     continue;
                 }
                 var queryName = ConstantDescs.INIT_NAME.equals(name) ? "new" : name;
-                var symbol = listedMemberTarget(opts, className, queryName);
-                if (matchesListedPrefix(opts, symbol)) {
+                var symbol = matchingMemberSymbol(opts, className, queryName);
+                if (symbol != null) {
                     printListedSymbol(out, opts, SymbolKind.METHOD, unitName, symbol,
                             listedMethodSignature(className, method), listOnly ? null : renderMethodDeclaration(model, method));
                 }
@@ -1550,28 +1549,34 @@ final class DeclarationSearch {
         return name + "[]".repeat(dimensions);
     }
 
-    private static String listedMemberTarget(Options opts, String className, String memberName) {
-        return className + "." + memberName;
+    private static String matchingMemberSymbol(Options opts, String className, String memberName) {
+        if (simpleNameTarget(opts.target())) {
+            return matchesListedPrefix(opts, memberName) ? className + "." + memberName : null;
+        }
+        var symbol = className + "." + memberName;
+        return matchesListedPrefix(opts, symbol) ? symbol : null;
     }
 
     private static boolean matchesListedPrefix(Options opts, String symbol) {
-        if (opts.target() == null) {
+        var prefix = opts.target();
+        if (prefix == null) {
             return true;
         }
-        var prefix = opts.target();
+        boolean simple = simpleNameTarget(prefix);
+        int start = simple ? symbol.lastIndexOf('.') + 1 : 0;
         if (opts.listOnly() && prefix.indexOf('*') >= 0) {
-            var candidate = simpleNameTarget(prefix) ? UsageSearch.terminalName(symbol) : symbol;
-            return wildcardMatches(prefix, candidate);
+            return wildcardMatches(prefix, symbol, start);
         }
-        if (simpleNameTarget(prefix)) {
-            return UsageSearch.terminalName(symbol).equals(prefix);
+        if (simple) {
+            return symbol.length() - start == prefix.length() && symbol.startsWith(prefix, start);
         }
-        return symbol.equals(prefix) || symbol.startsWith(prefix + ".");
+        return symbol.startsWith(prefix)
+                && (symbol.length() == prefix.length() || symbol.charAt(prefix.length()) == '.');
     }
 
-    private static boolean wildcardMatches(String pattern, String candidate) {
+    private static boolean wildcardMatches(String pattern, String candidate, int start) {
         int patternIndex = 0;
-        int candidateIndex = 0;
+        int candidateIndex = start;
         int wildcardIndex = -1;
         int wildcardCandidateIndex = -1;
         while (candidateIndex < candidate.length()) {
@@ -1762,8 +1767,7 @@ final class DeclarationSearch {
                             .getParentPath()
                             .getLeaf() instanceof ClassTree owner
                     && firstSourceFieldNamed(owner, tree)) {
-                var symbol = listedMemberTarget(opts, classNames.getLast(),
-                        tree.getName().toString());
+                var symbol = classNames.getLast() + "." + tree.getName();
                 printListedSymbol(out, opts, SymbolKind.FIELD, unitName, symbol,
                         compactSourceLine(tree.toString()) + ";", sourceRange(tree));
             }
@@ -1786,7 +1790,7 @@ final class DeclarationSearch {
                         .filter(member -> member instanceof MethodTree method && method.getName().contentEquals(keyName))
                         .count();
                 if (selectedDeclaration.test(attributionKey(classNames.getLast(), keyName, ordinal))) {
-                    var symbol = listedMemberTarget(opts, classNames.getLast(), name);
+                    var symbol = classNames.getLast() + "." + name;
                     printListedSymbol(out, opts, SymbolKind.METHOD, unitName, symbol,
                             listedSourceMethodSignature(classNames.getLast(), tree), renderSourceMethodDeclaration(tree),
                             sourceRange(tree));
@@ -2475,7 +2479,7 @@ final class DeclarationSearch {
         var methodTarget = "new".equals(simpleTarget) ? ConstantDescs.INIT_NAME : simpleTarget;
         var matches = new ArrayList<ContextMatch>();
         var owner = binaryName.replace('$', '.');
-        if (selected.listsType(model) && visibility.visible(classFlags) && matchesListedPrefix(selected, owner)) {
+        if (matchesListedPrefix(selected, owner) && selected.listsType(model) && visibility.visible(classFlags)) {
             matches.add(new ContextMatch(owner, owner, SymbolKind.classKind(model), owner,
                     attribution.getOrDefault(owner, Attribution.EMPTY)));
         }

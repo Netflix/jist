@@ -1428,22 +1428,32 @@ class ClassQueryTest {
                 jar.closeEntry();
             }
         }
-        var methods = run("--system", "none", "--class-path", archive.toString(),
-                "--source", "none", "--visibility", "all", "-l", "run");
-        assertEquals(0, methods.exitCode(), methods.error());
-        assertEquals("", methods.error());
-        assertEquals(List.of(
-                "method com.example.Example.run(int)",
-                "method com.example.Overloads.run()",
-                "method com.example.Overloads.run(java.lang.String)",
-                "method com.example.Overloads.run(int)"), methods.output().lines().toList());
-
-        var constructors = run("--system", "none", "--class-path", archive.toString(),
-                "--source", "none", "--visibility", "all", "-l", "new");
-        assertEquals(0, constructors.exitCode(), constructors.error());
-        assertEquals("", constructors.error());
-        assertEquals(List.of("method com.example.Example.new()", "method com.example.Overloads.new()"),
-                constructors.output().lines().toList());
+        for (var target : List.of("run", "*u*n", "*run*", "r**un")) {
+            var methods = run("--system", "none", "--class-path", archive.toString(),
+                    "--source", "none", "--visibility", "all", "-l", target);
+            assertEquals(0, methods.exitCode(), methods.error());
+            assertEquals("", methods.error());
+            assertEquals(List.of(
+                    "method com.example.Example.run(int)",
+                    "method com.example.Overloads.run()",
+                    "method com.example.Overloads.run(java.lang.String)",
+                    "method com.example.Overloads.run(int)"), methods.output().lines().toList(), target);
+        }
+        for (var target : List.of("new", "n*w", "*new*", "*n*e*w*")) {
+            var constructors = run("--system", "none", "--class-path", archive.toString(),
+                    "--source", "none", "--visibility", "all", "-l", target);
+            assertEquals(0, constructors.exitCode(), constructors.error());
+            assertEquals("", constructors.error());
+            assertEquals(List.of("method com.example.Example.new()", "method com.example.Overloads.new()"),
+                    constructors.output().lines().toList(), target);
+        }
+        for (var target : List.of("VALUE", "V*UE", "*VALUE*", "com.example.Example.VALUE")) {
+            var fields = run("--system", "none", "--class-path", archive.toString(),
+                    "--source", "none", "--visibility", "all", "-l", target);
+            assertEquals(0, fields.exitCode(), fields.error());
+            assertEquals("", fields.error());
+            assertEquals("field com.example.Example.VALUE\n", fields.output(), target);
+        }
     }
 
     @Test

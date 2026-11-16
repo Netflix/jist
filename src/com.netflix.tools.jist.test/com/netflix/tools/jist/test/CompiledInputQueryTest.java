@@ -84,6 +84,49 @@ class CompiledInputQueryTest {
     }
 
     @Test
+    void declarationScansPreserveMemberOrderAndVisibilityAcrossArchives(@TempDir Path directory) throws Exception {
+        var roots = new ArrayList<String>();
+        var visible = new ArrayList<String>();
+        var all = new ArrayList<String>();
+        int count = Runtime.getRuntime().availableProcessors() * 2 + 5;
+        for (int rootIndex = 0; rootIndex < 2; rootIndex++) {
+            var archive = directory.resolve("members-" + rootIndex + ".jar");
+            roots.add(archive.toString());
+            try (var jar = new JarOutputStream(Files.newOutputStream(archive))) {
+                for (int index = count - 1; index >= 0; index--) {
+                    var name = "ordered.Input" + rootIndex + "Type" + index;
+                    jar.putNextEntry(new JarEntry(name.replace('.', '/') + ".class"));
+                    jar.write(ClassFile.of().build(ClassDesc.of(name), builder -> builder.withFlags(ClassFile.ACC_PUBLIC)
+                            .withField("hit", ConstantDescs.CD_int, ClassFile.ACC_PUBLIC)
+                            .withField("hot", ConstantDescs.CD_int, ClassFile.ACC_PRIVATE)
+                            .withMethodBody("hit", MethodTypeDesc.of(ConstantDescs.CD_void),
+                                    ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC, code -> code.return_())
+                            .withMethodBody("hit", MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_int),
+                                    ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC, code -> code.return_())));
+                    jar.closeEntry();
+                    var fields = List.of("field " + name + ".hit");
+                    var methods = List.of("method " + name + ".hit()", "method " + name + ".hit(int)");
+                    visible.addAll(fields);
+                    visible.addAll(methods);
+                    all.addAll(fields);
+                    all.add("field " + name + ".hot");
+                    all.addAll(methods);
+                }
+            }
+        }
+        for (var visibility : List.of("public", "all")) {
+            var output = new StringWriter();
+            var error = new StringWriter();
+            int status = new Jist().run(new PrintWriter(output), new PrintWriter(error),
+                    "--limit-modules", "java.base", "--exclude-system-modules", "--class-path", String.join(File.pathSeparator, roots),
+                    "--source", "none", "--visibility", visibility, "-l", "h*t");
+            assertEquals(0, status, error.toString());
+            assertEquals("", error.toString());
+            assertEquals(visibility.equals("all") ? all : visible, output.toString().lines().toList());
+        }
+    }
+
+    @Test
     void relationshipScansReadSelectedMultiReleaseEntries(@TempDir Path directory) throws Exception {
         var archive = directory.resolve("versioned.jar");
         var manifest = new Manifest();

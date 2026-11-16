@@ -106,38 +106,29 @@ final class DeclarationSearch {
         out.flush();
     }
 
-    private record ListedClass(
-            String className,
-            ClassModel model,
-            SymbolKind metadataKind,
-            String packageName,
-            boolean validClass,
-            boolean visibleType,
-            SymbolKind kind) {}
+    private record ListedSymbol(SymbolKind kind, String unitName, String name, String declaration) {}
 
-    private static final class OrderedClassFiles extends OrderedReads<ListedClass> {
+    private static final class OrderedClassFiles extends OrderedReads<List<ListedSymbol>> {
         private final Options options;
         private final Visibility visibility;
         private final SourceLookup sources;
+        private final boolean listOnly;
 
         OrderedClassFiles(PrintWriter out, Options options, Visibility visibility,
                          Set<String> emittedPackages, SourceLookup sources, ExecutorService executor) {
-            super(executor, listedClass -> {
-                if (listedClass != null) {
-                    addListedClassSymbols(out, listedClass, options, visibility, emittedPackages);
-                }
-            });
+            super(executor, symbols -> addListedClassSymbols(out, symbols, emittedPackages));
             this.options = options;
             this.visibility = visibility;
             this.sources = sources;
+            this.listOnly = out instanceof SymbolOutput output && output.listOnly();
         }
 
         void submit(ClassInput input, String className) throws IOException, ToolException {
             if (!options.requiresClassModel(className)) {
-                add(prepareListedClass(input.resource(), className, null, options, visibility, sources));
+                add(prepareListedClass(input.resource(), className, null, options, visibility, sources, listOnly));
             } else {
                 submit(() -> prepareListedClass(input.resource(), className, CLASS_FILE.parse(input.read()),
-                        options, visibility, sources));
+                        options, visibility, sources, listOnly));
             }
         }
     }
@@ -1013,11 +1004,11 @@ final class DeclarationSearch {
         return !opts.listsOnlyTypes() || matchesListedPrefix(opts, className);
     }
 
-    private static ListedClass prepareListedClass(String resourceName, String className, ClassModel model,
-            Options opts, Visibility visibility, SourceLookup sources) {
+    private static List<ListedSymbol> prepareListedClass(String resourceName, String className, ClassModel model,
+            Options opts, Visibility visibility, SourceLookup sources, boolean listOnly) {
         if (model != null && sources.mayHaveOrdinarySource(resourceName) && sources.hasOrdinarySource(model)) {
             return null;
-            }
+        }
         var metadataKind = metadataKind(model, className);
         var packageName = !opts.listsPackages()
                 ? ""
@@ -1029,35 +1020,35 @@ final class DeclarationSearch {
         if (metadataKind == SymbolKind.PACKAGE
                 || metadataKind == SymbolKind.MODULE
                 || !opts.listsTypes() && !opts.listsMethods() && !opts.listsFields()) {
-            return new ListedClass(className, model, metadataKind, packageName, true, false,
-                    null);
+            return prepareListedSymbols(className, model, opts, visibility, metadataKind, packageName,
+                    true, false, null, listOnly);
         }
+        boolean visibleType;
+        SymbolKind kind;
         try {
-            var visibleType = model == null || visibility.visible(resourceName.indexOf('$') < 0 ? model.flags().flags() : listedClassFlags(model));
-            var kind = opts.listsTypes() ? SymbolKind.classKind(model) : null;
-            return new ListedClass(className, model, metadataKind, packageName, true, visibleType,
-                    kind);
+            visibleType = model == null || visibility.visible(resourceName.indexOf('$') < 0 ? model.flags().flags() : listedClassFlags(model));
+            kind = opts.listsTypes() ? SymbolKind.classKind(model) : null;
         } catch (IllegalArgumentException _) {
             // VM-generated JDK holder classes can carry member-only visibility bits.
-            return new ListedClass(className, model, metadataKind, packageName, false, false,
-                    null);
+            return prepareListedSymbols(className, model, opts, visibility, metadataKind, packageName,
+                    false, false, null, listOnly);
         }
+        return prepareListedSymbols(className, model, opts, visibility, metadataKind, packageName,
+                true, visibleType, kind, listOnly);
     }
 
-    private static void addListedClassSymbols(PrintWriter out, ListedClass listedClass, Options opts,
-            Visibility visibility, Set<String> emittedPackages) {
-        addListedSymbols(
-                out,
-                listedClass.className(),
-                listedClass.model(),
-                opts,
-                visibility,
-                emittedPackages,
-                listedClass.metadataKind(),
-                listedClass.packageName(),
-                listedClass.validClass(),
-                listedClass.visibleType(),
-                listedClass.kind());
+    private static void addListedClassSymbols(PrintWriter out, List<ListedSymbol> symbols, Set<String> emittedPackages) {
+        if (symbols == null) {
+            return;
+        }
+        for (var symbol : symbols) {
+            if (symbol.kind() == SymbolKind.PACKAGE && !emittedPackages.add(symbol.name())) {
+                continue;
+            }
+            if (!printListSymbol(out, symbol.kind(), symbol.name(), null)) {
+                out.println(symbol.unitName() + ": " + symbol.declaration());
+            }
+        }
     }
 
     private static void addListedSymbols(PrintWriter out, String className, ClassModel model,
@@ -1100,96 +1091,81 @@ final class DeclarationSearch {
                 validClass = false;
             }
         }
-        addListedSymbols(out, className, model, opts, visibility, emittedPackages,
-                metadataKind, packageName, validClass, visibleType, kind);
+        boolean listOnly = out instanceof SymbolOutput output && output.listOnly();
+        addListedClassSymbols(out, prepareListedSymbols(className, model, opts, visibility,
+                metadataKind, packageName, validClass, visibleType, kind, listOnly), emittedPackages);
     }
 
-    private static void addListedSymbols(
-            PrintWriter out,
+    private static List<ListedSymbol> prepareListedSymbols(
             String className,
             ClassModel model,
             Options opts,
             Visibility visibility,
-            Set<String> emittedPackages,
             SymbolKind metadataKind,
             String packageName,
             boolean validClass,
             boolean visibleType,
-            SymbolKind kind) {
-        var listOnly = out instanceof SymbolOutput output && output.listOnly();
-        if (!packageName.isEmpty()
-                && opts.listsPackages()
-                && emittedPackages.add(packageName)
-                && matchesListedPrefix(opts, packageName)) {
+            SymbolKind kind,
+            boolean listOnly) {
+        var symbols = new ArrayList<ListedSymbol>();
+        if (!packageName.isEmpty() && opts.listsPackages() && matchesListedPrefix(opts, packageName)) {
             String declaration = null;
             if (!listOnly) {
                 var rendered = new StringBuilder();
-            if (metadataKind == SymbolKind.PACKAGE && model != null) {
+                if (metadataKind == SymbolKind.PACKAGE && model != null) {
                     appendDeclarationAnnotations(rendered, model);
+                }
+                declaration = rendered.append("package ").append(packageName).append(';').toString();
             }
-                declaration = rendered.append("package ")
-                       .append(packageName)
-                                      .append(';')
-                                      .toString();
-        }
-            printListedSymbol(out, opts, SymbolKind.PACKAGE, packageName, packageName, declaration);
-        }
-        if (metadataKind == SymbolKind.PACKAGE || !validClass) {
-            return;
+            symbols.add(new ListedSymbol(SymbolKind.PACKAGE, packageName, packageName, declaration));
         }
         if (metadataKind == SymbolKind.MODULE) {
             if (model != null && opts.listsModules()) {
                 var moduleName = compiledModuleName(model);
                 if (moduleName != null && matchesListedPrefix(opts, moduleName)) {
-                    printListedSymbol(out, opts, SymbolKind.MODULE, moduleName, moduleName,
-                            listOnly ? null : renderModuleDeclaration(model));
+                    symbols.add(new ListedSymbol(SymbolKind.MODULE, moduleName, moduleName,
+                            listOnly ? null : renderModuleDeclaration(model)));
                 }
             }
-            return;
-        }
-        if (!opts.listsTypes() && !opts.listsMethods() && !opts.listsFields()) {
-            return;
-        }
-        var unitName = listOnly ? null : ClassFileRenderer.compilationUnitName(model, className);
-        if (visibleType && opts.listsType(kind) && matchesListedPrefix(opts, className)) {
-            printListedSymbol(out, opts, kind, unitName, className,
-                    listOnly ? null : renderTypeDeclaration(model));
-        }
-        if (!opts.listsMethods() && !opts.listsFields()) {
-            return;
-        }
-
-        if (opts.listsFields()) {
-            for (int i = 0; i < model.fields().size(); i++) {
-                var field = model.fields().get(i);
-                if (!field.flags().has(AccessFlag.SYNTHETIC) && visibility.visible(field.flags()) && firstFieldNamed(model, i,
-                        field.fieldName().stringValue())) {
-                    var symbol = matchingMemberSymbol(opts, className, field.fieldName().stringValue());
+        } else if (metadataKind != SymbolKind.PACKAGE && validClass
+                && (opts.listsTypes() || opts.listsMethods() || opts.listsFields())) {
+            var unitName = listOnly ? null : ClassFileRenderer.compilationUnitName(model, className);
+            if (visibleType && opts.listsType(kind) && matchesListedPrefix(opts, className)) {
+                symbols.add(new ListedSymbol(kind, unitName, className,
+                        listOnly ? null : renderTypeDeclaration(model)));
+            }
+            if (opts.listsFields()) {
+                for (int i = 0; i < model.fields().size(); i++) {
+                    var field = model.fields().get(i);
+                    if (!field.flags().has(AccessFlag.SYNTHETIC) && visibility.visible(field.flags()) && firstFieldNamed(model, i,
+                            field.fieldName().stringValue())) {
+                        var symbol = matchingMemberSymbol(opts, className, field.fieldName().stringValue());
+                        if (symbol != null) {
+                            symbols.add(new ListedSymbol(SymbolKind.FIELD, unitName, symbol,
+                                    listOnly ? null : renderFieldDeclaration(field)));
+                        }
+                    }
+                }
+            }
+            if (opts.listsMethods()) {
+                for (var method : model.methods()) {
+                    if (method.flags().has(AccessFlag.SYNTHETIC) || method.flags().has(AccessFlag.BRIDGE) || !visibility.visible(method.flags())) {
+                        continue;
+                    }
+                    var name = method.methodName().stringValue();
+                    if (ConstantDescs.CLASS_INIT_NAME.equals(name)) {
+                        continue;
+                    }
+                    var queryName = ConstantDescs.INIT_NAME.equals(name) ? "new" : name;
+                    var symbol = matchingMemberSymbol(opts, className, queryName);
                     if (symbol != null) {
-                        printListedSymbol(out, opts, SymbolKind.FIELD, unitName, symbol,
-                                listOnly ? null : renderFieldDeclaration(field));
+                        symbols.add(new ListedSymbol(SymbolKind.METHOD, unitName, listedMethodSignature(className, method),
+                                listOnly ? null : renderMethodDeclaration(model, method)));
                     }
                 }
             }
         }
-        if (opts.listsMethods()) {
-            for (int i = 0; i < model.methods().size(); i++) {
-                var method = model.methods().get(i);
-                if (method.flags().has(AccessFlag.SYNTHETIC) || method.flags().has(AccessFlag.BRIDGE) || !visibility.visible(method.flags())) {
-                    continue;
-                }
-                var name = method.methodName().stringValue();
-                if (ConstantDescs.CLASS_INIT_NAME.equals(name)) {
-                    continue;
-                }
-                var queryName = ConstantDescs.INIT_NAME.equals(name) ? "new" : name;
-                var symbol = matchingMemberSymbol(opts, className, queryName);
-                if (symbol != null) {
-                    printListedSymbol(out, opts, SymbolKind.METHOD, unitName, symbol,
-                            listedMethodSignature(className, method), listOnly ? null : renderMethodDeclaration(model, method));
-                }
-            }
-        }
+        return symbols.isEmpty() ? null : List.copyOf(symbols);
     }
 
     private static void printListedSymbol(PrintWriter out, Options opts, SymbolKind kind,

@@ -21,11 +21,15 @@ import java.io.StringWriter;
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.ClassTransform;
 import java.lang.classfile.attribute.SourceFileAttribute;
+import java.lang.constant.ClassDesc;
+import java.lang.constant.ConstantDescs;
+import java.lang.constant.MethodTypeDesc;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.jar.Attributes.Name;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -510,6 +514,168 @@ class ClassQueryTest {
                 classFileResult.output());
         assertFalse(classFileResult.output().contains("Example.java:"),
                 classFileResult.output());
+    }
+
+    @Test
+    void sourceContextsPreserveArchiveAndDirectoryOrder(@TempDir Path directory) throws IOException {
+        var archive = directory.resolve("ordered.jar");
+        var sourceArchive = directory.resolve("ordered-sources.jar");
+        var classes = Files.createDirectories(directory.resolve("classes/ordered"));
+        var expected = new java.util.ArrayList<String>();
+        int count = Runtime.getRuntime().availableProcessors() * 2 + 5;
+        try (var jar = new JarOutputStream(Files.newOutputStream(archive));
+                var sources = new JarOutputStream(Files.newOutputStream(sourceArchive))) {
+            for (int index = count - 1; index >= 0; index--) {
+                var name = "Type" + index;
+                var bytes = ClassFile.of().build(ClassDesc.of("ordered." + name), builder -> builder
+                        .withFlags(ClassFile.ACC_PUBLIC)
+                        .with(SourceFileAttribute.of(name + ".java"))
+                        .withMethodBody("work", MethodTypeDesc.of(ConstantDescs.CD_void), ClassFile.ACC_PUBLIC,
+                                code -> code.return_()));
+                Files.write(classes.resolve(name + ".class"), bytes);
+                jar.putNextEntry(new JarEntry("ordered/" + name + ".class"));
+                jar.write(bytes);
+                jar.closeEntry();
+                sources.putNextEntry(new JarEntry("ordered/" + name + ".java"));
+                sources.write(("package ordered;\n\npublic class " + name + " {\n    public void work() {}\n}\n")
+                        .getBytes(StandardCharsets.UTF_8));
+                sources.closeEntry();
+                expected.add("ordered." + name + "(" + name + ".java:4):     public void work() {}");
+            }
+        }
+        List<String> directoryOrder;
+        try (var files = Files.find(classes, Integer.MAX_VALUE, (_, attributes) -> attributes.isRegularFile())) {
+            directoryOrder = files.map(file -> file.getFileName().toString().replace(".class", ""))
+                    .map(name -> "ordered." + name + "(" + name + ".java:4):     public void work() {}")
+                    .toList();
+        }
+        for (var input : List.of(archive, classes.getParent())) {
+            var result = run("--system", "none", "--class-path", input.toString(),
+                    "--source-path", sourceArchive.toString(), "--source", "signature", "--kind", "method", "work");
+            assertEquals(0, result.exitCode(), result.error());
+            assertEquals("", result.error());
+            assertEquals(input.equals(archive) ? expected : directoryOrder, result.output().lines().toList());
+        }
+    }
+
+    @Test
+    void directoryDeclarationsEmitPackageMetadataBeforeTypes(@TempDir Path directory) throws IOException {
+        var classes = Files.createDirectories(directory.resolve("classes"));
+        var packageDirectory = Files.createDirectories(classes.resolve("modular/api"));
+        for (var name : List.of("modular.api.a.Nested", "modular.api.Zulu", "modular.api.Alpha")) {
+            var file = classes.resolve(name.replace('.', '/') + ".class");
+            Files.createDirectories(file.getParent());
+            Files.write(file, ClassFile.of().build(ClassDesc.of(name), builder -> builder.withFlags(ClassFile.ACC_PUBLIC)));
+        }
+        Files.copy(MODULE_CLASSES.resolve("modular/api/package-info.class"), packageDirectory.resolve("package-info.class"));
+
+        var listed = run("--system", "none", "--class-path", classes.toString(), "-l", "--kind", "package", "--kind", "type");
+        var described = run("--system", "none", "--class-path", classes.toString(), "--source", "none",
+                "--kind", "package", "--kind", "type");
+
+        assertEquals(0, listed.exitCode(), listed.error());
+        var listedLines = listed.output().lines().toList();
+        assertEquals(5, listedLines.size());
+        assertEquals("package modular.api", listedLines.getFirst());
+        assertEquals(Set.of("package modular.api", "class modular.api.Alpha", "class modular.api.Zulu",
+                "package modular.api.a", "class modular.api.a.Nested"), Set.copyOf(listedLines));
+        assertTrue(listedLines.indexOf("package modular.api.a") < listedLines.indexOf("class modular.api.a.Nested"));
+        assertEquals(0, described.exitCode(), described.error());
+        var describedLines = described.output().lines().toList();
+        assertEquals(5, describedLines.size());
+        assertEquals("modular.api: @Deprecated package modular.api;", describedLines.getFirst());
+        assertEquals(Set.of("modular.api: @Deprecated package modular.api;", "modular.api.Alpha: public class Alpha {",
+                "modular.api.Zulu: public class Zulu {", "modular.api.a: package modular.api.a;",
+                "modular.api.a.Nested: public class Nested {"), Set.copyOf(describedLines));
+    }
+
+    @Test
+    void directorySourceDeclarationsEmitMetadataOnceBeforeTypes() {
+        var result = run("--system", "none", "--source-path", ROOT.resolve("module-src/sample.module").toString(),
+                "-l", "--kind", "module", "--kind", "package", "--kind", "type");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals("", result.error());
+        var lines = result.output().lines().toList();
+        assertEquals("module sample.module", lines.getFirst());
+        assertEquals(1, lines.stream().filter("module sample.module"::equals).count());
+        assertEquals(1, lines.stream().filter("package modular.api"::equals).count());
+        assertTrue(lines.indexOf("package modular.api") < lines.indexOf("class modular.api.ModuleType"), result.output());
+    }
+
+    @Test
+    void directoryDeclarationsReadSymbolicLinkFiles(@TempDir Path directory) throws IOException {
+        var classes = Files.createDirectories(directory.resolve("classes"));
+        Files.createDirectories(classes.resolve("com/example"));
+        Files.createSymbolicLink(classes.resolve("com/example/Example.class"), CLASS.toAbsolutePath());
+        var linkedRoot = Files.createSymbolicLink(directory.resolve("linked-classes"), classes);
+
+        for (var input : List.of(classes, linkedRoot)) {
+            var result = run("--system", "none", "--class-path", input.toString(), "--source", "none", "-l", "--kind", "type");
+
+            assertEquals(0, result.exitCode(), result.error());
+            assertEquals("", result.error());
+            assertEquals("class com.example.Example\n", result.output());
+        }
+    }
+
+    @Test
+    void simpleNameKeepsPackageResultsWithoutMatchingClassMembers(@TempDir Path directory) throws IOException {
+        var classes = Files.createDirectories(directory.resolve("classes"));
+        var file = classes.resolve("example/marker/Other.class");
+        Files.createDirectories(file.getParent());
+        Files.write(file, ClassFile.of().build(ClassDesc.of("example.marker.Other"),
+                builder -> builder.withFlags(ClassFile.ACC_PUBLIC)));
+
+        var result = run("--system", "none", "--class-path", classes.toString(), "--source", "none", "marker");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals("example.marker: package example.marker;\n", result.output());
+    }
+
+    @Test
+    void sourceContextsCombineOrdinaryAndAttachedSource(@TempDir Path directory) throws IOException {
+        var archive = directory.resolve("mixed.jar");
+        var sourceArchive = directory.resolve("mixed-sources.jar");
+        var sourceDirectory = Files.createDirectories(directory.resolve("src/mixed"));
+        Files.writeString(sourceDirectory.resolve("Shared.java"), """
+                package mixed;
+                class Shadowed {
+                    public String marker() { return "current"; }
+                }
+                """);
+        try (var jar = new JarOutputStream(Files.newOutputStream(archive));
+                var sources = new JarOutputStream(Files.newOutputStream(sourceArchive))) {
+            for (var name : List.of("mixed.Shadowed", "external.Attached")) {
+                var sourceFile = name.equals("mixed.Shadowed") ? "Shared.java" : "Attached.java";
+                var bytes = ClassFile.of().build(ClassDesc.of(name), builder -> builder
+                        .withFlags(ClassFile.ACC_PUBLIC)
+                        .with(SourceFileAttribute.of(sourceFile))
+                        .withMethodBody("marker", MethodTypeDesc.of(ConstantDescs.CD_void), ClassFile.ACC_PUBLIC,
+                                code -> code.return_()));
+                jar.putNextEntry(new JarEntry(name.replace('.', '/') + ".class"));
+                jar.write(bytes);
+                jar.closeEntry();
+            }
+            sources.putNextEntry(new JarEntry("external/Attached.java"));
+            sources.write("""
+                    package external;
+                    public class Attached {
+                        public void marker() {}
+                    }
+                    """.getBytes(StandardCharsets.UTF_8));
+            sources.closeEntry();
+        }
+        var result = run("--system", "none", "--class-path", archive.toString(),
+                "--source-path", sourceDirectory.getParent() + File.pathSeparator + sourceArchive,
+                "--visibility", "all", "--kind", "method", "--source", "signature", "marker");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals("", result.error());
+        assertEquals(List.of(
+                "external.Attached(Attached.java:3):     public void marker() {}",
+                "mixed.Shared(Shared.java:3):     public String marker() { return \"current\"; }"),
+                result.output().lines().toList());
     }
 
     @Test
@@ -1253,6 +1419,44 @@ class ClassQueryTest {
     }
 
     @Test
+    void simpleMethodNamesPreserveArchiveOverloadsAndConstructors(@TempDir Path directory) throws IOException {
+        var archive = directory.resolve("members.jar");
+        try (var jar = new JarOutputStream(Files.newOutputStream(archive))) {
+            for (var name : List.of("Example", "Overloads")) {
+                jar.putNextEntry(new JarEntry("com/example/" + name + ".class"));
+                Files.copy(ROOT.resolve("classes/com/example/" + name + ".class"), jar);
+                jar.closeEntry();
+            }
+        }
+        for (var target : List.of("run", "*u*n", "*run*", "r**un")) {
+            var methods = run("--system", "none", "--class-path", archive.toString(),
+                    "--source", "none", "--visibility", "all", "-l", target);
+            assertEquals(0, methods.exitCode(), methods.error());
+            assertEquals("", methods.error());
+            assertEquals(List.of(
+                    "method com.example.Example.run(int)",
+                    "method com.example.Overloads.run()",
+                    "method com.example.Overloads.run(java.lang.String)",
+                    "method com.example.Overloads.run(int)"), methods.output().lines().toList(), target);
+        }
+        for (var target : List.of("new", "n*w", "*new*", "*n*e*w*")) {
+            var constructors = run("--system", "none", "--class-path", archive.toString(),
+                    "--source", "none", "--visibility", "all", "-l", target);
+            assertEquals(0, constructors.exitCode(), constructors.error());
+            assertEquals("", constructors.error());
+            assertEquals(List.of("method com.example.Example.new()", "method com.example.Overloads.new()"),
+                    constructors.output().lines().toList(), target);
+        }
+        for (var target : List.of("VALUE", "V*UE", "*VALUE*", "com.example.Example.VALUE")) {
+            var fields = run("--system", "none", "--class-path", archive.toString(),
+                    "--source", "none", "--visibility", "all", "-l", target);
+            assertEquals(0, fields.exitCode(), fields.error());
+            assertEquals("", fields.error());
+            assertEquals("field com.example.Example.VALUE\n", fields.output(), target);
+        }
+    }
+
+    @Test
     void simpleNameShowOriginIdentifiesClassFileFallback() {
         var result = run("--system", "none", "--class-path", JAR.toString(), "--source",
                 "none", "--show-origin", "Example");
@@ -1731,6 +1935,19 @@ class ClassQueryTest {
                 result.output());
         assertTrue(result.output().contains("return amount + 1;"),
                 result.output());
+    }
+
+    @Test
+    void simpleNameReadsSourceForSelectedMultiReleaseClass() {
+        var result = run("--system", "none", "--class-path", MULTI_RELEASE_JAR.toString(),
+                "--source-path", MULTI_RELEASE_SOURCE_JAR.toString(), "--source", "definition",
+                "--show-origin", "--kind", "method", "marker");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals("", result.error());
+        assertTrue(result.output().contains("versioned-sources.jar!/META-INF/versions/9/com/example/Versioned.java"),
+                result.output());
+        assertTrue(result.output().contains("return \"versioned\";"), result.output());
     }
 
     @Test

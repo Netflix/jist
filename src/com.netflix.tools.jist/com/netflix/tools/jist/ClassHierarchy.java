@@ -27,15 +27,17 @@ import static com.netflix.tools.jist.SearchEnvironment.readsUnnamedModule;
 final class ClassHierarchy implements Closeable {
     private static final ClassFile CLASS_FILE = ClassFile.of();
 
-    private final Map<String, Node> types = new ConcurrentHashMap<>();
+    private final Map<String, List<String>> types = new HashMap<>();
     private final Map<String, List<String>> resolvedParents = new HashMap<>();
+    private final Map<String, List<PreparedClass>> compiledInputs = new HashMap<>();
     private final SearchEnvironment environment;
     private final SourceLookup sources;
-    private final Set<String> sourceTypes = ConcurrentHashMap.newKeySet();
-    private final Set<Path> sourceFiles = ConcurrentHashMap.newKeySet();
+    private final Set<String> sourceTypes = new HashSet<>();
+    private final Set<Path> sourceFiles = new HashSet<>();
     private final URLClassLoader classPath;
     private FileSystem system;
     private boolean closeSystem;
+    private Map<String, Set<String>> systemPackages;
 
     private ClassHierarchy(Options options, SearchEnvironment environment) throws IOException, ToolException {
         this.environment = environment;
@@ -128,8 +130,9 @@ final class ClassHierarchy implements Closeable {
         }
         var matches = new HashSet<String>();
         var memo = new HashMap<String, Boolean>();
+        var visiting = new HashSet<String>();
         for (var candidate : types.keySet()) {
-            if (reachesSource(candidate, memo, new HashSet<>())) {
+            if (reachesSource(candidate, memo, visiting)) {
                 matches.add(candidate);
             }
         }
@@ -163,42 +166,51 @@ final class ClassHierarchy implements Closeable {
     private Set<String> descendants(Set<String> targets, boolean direct, boolean includeTargets) throws IOException, ToolException {
         var matches = new LinkedHashSet<String>();
         var memo = new HashMap<String, Boolean>();
+        var visiting = new HashSet<String>();
         for (var candidate : types.keySet()) {
             if ((includeTargets || !targets.contains(candidate))
                     && (direct ? types.get(candidate)
-                                      .parents()
                                       .stream()
                                       .anyMatch(targets::contains)
-                            : reaches(candidate, targets, memo, new HashSet<>()))) {
+                            : reaches(candidate, targets, memo, visiting))) {
                 matches.add(candidate);
             }
         }
         return Set.copyOf(matches);
     }
 
-    private void scan(List<Input> inputs) throws IOException, ToolException {
-        var permits = new Semaphore(Math.max(2, Runtime.getRuntime().availableProcessors()));
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            var tasks = new ArrayList<Future<?>>(inputs.size());
-            for (int index = 0; index < inputs.size(); index++) {
-                int inputOrder = index;
-                var input = inputs.get(index);
-                tasks.add(executor.submit(() -> {
-                    permits.acquire();
-                    try {
-                        CompiledInputs.scanEntry(
-                                input.path(),
-                                CompiledInputs::readAllBytes,
-                                (bytes, _) -> add(inputOrder, CLASS_FILE.parse(bytes)),
-                                input.filter());
-                    } finally {
-                        permits.release();
-                    }
-                    return null;
-                }));
+    Map<String, List<String>> compiledResources(Predicate<String> matches) {
+        var selected = new HashMap<String, List<String>>();
+        compiledInputs.forEach((root, classes) -> {
+            var resources = classes.stream()
+                    .filter(candidate -> matches.test(candidate.name()))
+                    .map(PreparedClass::resource)
+                    .toList();
+            if (!resources.isEmpty()) {
+                selected.put(root, resources);
             }
-            for (var task : tasks) {
-                await(task);
+        });
+        return Map.copyOf(selected);
+    }
+
+    private void scan(List<Input> inputs) throws IOException, ToolException {
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (var input : inputs) {
+                var classes = new ArrayList<PreparedClass>();
+                try (var root = CompiledInputs.Root.open(input.path());
+                     var reads = new CompiledInputs.OrderedReads<PreparedClass>(executor, prepared -> {
+                         add(prepared);
+                         classes.add(prepared);
+                     })) {
+                    root.forEach(false, resource -> {
+                        if (input.filter().test(resource.resource())) {
+                            reads.submit(() -> prepare(CLASS_FILE.parse(resource.read()), resource.resource()));
+                        }
+                    });
+                    reads.finish();
+                }
+                // The selected JRT filesystem may be reopened before declaration output.
+                compiledInputs.put(SearchEnvironment.unitLocation(input.path()), classes);
             }
         }
     }
@@ -224,65 +236,68 @@ final class ClassHierarchy implements Closeable {
         return result;
     }
 
-    private void add(int inputOrder, ClassModel model) {
+    private PreparedClass prepare(ClassModel model, String resource) {
         if (model.isModuleInfo()) {
-            return;
+            return null;
         }
-        rememberSource(model);
-        var node = new Node(inputOrder, parents(model));
-        types.compute(UsageSearch.displayClassName(model),
-                (_, existing) ->
-                        existing == null || inputOrder < existing.inputOrder()
-                                ? node
-                                : existing);
+        var internalName = model.thisClass().asInternalName();
+        var source = sources.mayHaveOrdinarySource(internalName) ? sources.ordinarySource(model) : null;
+        return new PreparedClass(displayName(internalName), parents(model), source, resource);
+    }
+
+    private void add(PreparedClass prepared) {
+        rememberSource(prepared);
+        types.putIfAbsent(prepared.name(), prepared.parents());
     }
 
     private List<String> parents(String name) throws IOException, ToolException {
-        var node = types.get(name);
-        if (node != null) {
-            return node.parents();
+        var scanned = types.get(name);
+        if (scanned != null) {
+            return scanned;
         }
         var known = resolvedParents.get(name);
         if (known != null) {
             return known;
         }
-        var model = classPathClass(name);
+        var candidates = SearchEnvironment.classFileCandidates(name);
+        var model = classPathClass(candidates);
+        if (model == null) {
+            model = moduleClass(candidates);
+            if (model == null) {
+                model = systemClass(candidates);
+            }
+        }
         List<String> parents;
         if (model != null) {
-            parents = parents(model);
-        } else {
-            model = moduleClass(name);
-            if (model == null) {
-                model = systemClass(name);
+            var prepared = prepare(model, null);
+            parents = prepared == null ? List.of() : prepared.parents();
+            if (prepared != null) {
+                rememberSource(prepared);
             }
-            parents = model == null ? List.of() : parents(model);
-        }
-        if (model != null) {
-            rememberSource(model);
-        } else if (SearchEnvironment.classFileCandidates(name).stream().anyMatch(sources::mayHaveOrdinarySource)) {
-            var source = environment.resolveSourceFile(name);
-            if (source != null) {
-                sourceTypes.add(name);
-                sourceFiles.add(source);
+        } else {
+            parents = List.of();
+            if (candidates.stream().anyMatch(sources::mayHaveOrdinarySource)) {
+                var source = environment.resolveSourceFile(name);
+                if (source != null) {
+                    sourceTypes.add(name);
+                    sourceFiles.add(source);
+                }
             }
         }
         resolvedParents.put(name, parents);
         return parents;
     }
 
-    private void rememberSource(ClassModel model) {
-        if (sources.mayHaveOrdinarySource(model.thisClass().asInternalName())) {
-            var source = sources.ordinarySource(model);
-            if (source != null) {
-                sourceTypes.add(UsageSearch.displayClassName(model));
-                sourceFiles.add(source);
-            }
+    private void rememberSource(PreparedClass prepared) {
+        if (prepared.source() != null) {
+            sourceTypes.add(prepared.name());
+            sourceFiles.add(prepared.source());
         }
     }
 
-    private ClassModel classPathClass(String name) throws IOException {
+    private ClassModel classPathClass(List<String> candidates) throws IOException {
         // Resolve resources without loading classes or applying javac's --release to multi-release jars.
-        for (var candidate : SearchEnvironment.classFileCandidates(name)) {
+        for (var candidate : candidates) {
             var resource = classPath.findResource(candidate);
             if (resource == null) {
                 continue;
@@ -296,8 +311,8 @@ final class ClassHierarchy implements Closeable {
         return null;
     }
 
-    private ClassModel moduleClass(String name) throws IOException, ToolException {
-        for (var candidate : SearchEnvironment.classFileCandidates(name)) {
+    private ClassModel moduleClass(List<String> candidates) throws IOException, ToolException {
+        for (var candidate : candidates) {
             for (var module : environment.moduleInputs()) {
                 if (!module.includesResource(candidate)) {
                     continue;
@@ -311,16 +326,22 @@ final class ClassHierarchy implements Closeable {
         return null;
     }
 
-    private ClassModel systemClass(String name) throws IOException, ToolException {
+    private ClassModel systemClass(List<String> candidates) throws IOException, ToolException {
         if (system == null) {
             return null;
         }
-        for (var candidate : SearchEnvironment.classFileCandidates(name)) {
-            for (var module : environment.modules().systemPackages().keySet()) {
-                if (!environment.includesSystemResource(module, candidate)) {
+        if (systemPackages == null) {
+            systemPackages = environment.systemModulePackages();
+        }
+        for (var candidate : candidates) {
+            int slash = candidate.lastIndexOf('/');
+            var packageName = slash < 0 ? "" : candidate.substring(0, slash).replace('/', '.');
+            for (var module : systemPackages.entrySet()) {
+                if (!module.getValue().contains(packageName)
+                        || !environment.includesSystemResource(module.getKey(), candidate)) {
                     continue;
                 }
-                var file = system.getPath("/modules", module, candidate);
+                var file = system.getPath("/modules", module.getKey(), candidate);
                 if (Files.isRegularFile(file)) {
                     return CLASS_FILE.parse(Files.readAllBytes(file));
                 }
@@ -336,37 +357,11 @@ final class ClassHierarchy implements Closeable {
         return List.copyOf(parents);
     }
 
-    private static void await(Future<?> task) throws IOException, ToolException {
-        try {
-            task.get();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            var interrupted = new InterruptedIOException("Interrupted while reading ClassFiles");
-            interrupted.initCause(e);
-            throw interrupted;
-        } catch (ExecutionException e) {
-            var cause = e.getCause();
-            if (cause instanceof IOException failure) {
-                throw failure;
-            }
-            if (cause instanceof ToolException failure) {
-                throw failure;
-            }
-            if (cause instanceof RuntimeException failure) {
-                throw failure;
-            }
-            if (cause instanceof Error failure) {
-                throw failure;
-            }
-            throw new IOException("Failed to read ClassFile hierarchy", cause);
-        }
-    }
-
     private static String displayName(String internalName) {
         return internalName.replace('/', '.').replace('$', '.');
     }
 
     private record Input(Path path, Filter filter) {}
 
-    private record Node(int inputOrder, List<String> parents) {}
+    private record PreparedClass(String name, List<String> parents, Path source, String resource) {}
 }

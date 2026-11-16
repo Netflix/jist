@@ -19,12 +19,13 @@ import module java.base;
 import java.lang.classfile.Attributes;
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.ClassModel;
-import java.nio.file.LinkOption;
 import java.util.Map.Entry;
 import javax.lang.model.element.Modifier;
 import javax.tools.ToolProvider;
 
+import com.netflix.tools.jist.CompiledInputs.ClassInput;
 import com.netflix.tools.jist.CompiledInputs.Filter;
+import com.netflix.tools.jist.CompiledInputs.OrderedReads;
 import com.netflix.tools.jist.Output.CountingPrintWriter;
 import com.netflix.tools.jist.Output.OriginOutput;
 import com.netflix.tools.jist.Output.SourceRange;
@@ -55,6 +56,7 @@ import static com.netflix.tools.jist.ClassFileRenderer.renderFieldDeclaration;
 import static com.netflix.tools.jist.ClassFileRenderer.renderMethodDeclaration;
 import static com.netflix.tools.jist.ClassFileRenderer.renderModuleDeclaration;
 import static com.netflix.tools.jist.ClassFileRenderer.renderTypeDeclaration;
+import static com.netflix.tools.jist.CompiledInputs.walkFiles;
 import static com.netflix.tools.jist.SearchEnvironment.isExportedClassResource;
 import static com.netflix.tools.jist.SearchEnvironment.isVisibleModuleClass;
 import static com.netflix.tools.jist.SearchEnvironment.listedClassName;
@@ -104,143 +106,63 @@ final class DeclarationSearch {
         out.flush();
     }
 
-    private static final int CLASS_FILE_WINDOW = Runtime.getRuntime().availableProcessors();
+    private record ListedSymbol(SymbolKind kind, String unitName, String name, String declaration) {}
 
-    @FunctionalInterface
-    private interface PathConsumer {
-        void accept(Path path) throws IOException, ToolException;
-    }
-
-    @FunctionalInterface
-    private interface ClassModelReader {
-        ClassModel read() throws IOException;
-    }
-
-    private record ListedClass(
-            String className,
-            ClassModel model,
-            SymbolKind metadataKind,
-            String packageName,
-            boolean validClass,
-            boolean visibleType,
-            SymbolKind kind) {}
-
-    private static final class OrderedClassFiles implements AutoCloseable {
-        private final PrintWriter out;
+    private static final class OrderedClassFiles extends OrderedReads<List<ListedSymbol>> {
         private final Options options;
         private final Visibility visibility;
-        private final Set<String> emittedPackages;
         private final SourceLookup sources;
-        private final ExecutorService executor;
-        private final Deque<Future<ListedClass>> pending = new ArrayDeque<>();
-        private boolean finished;
+        private final boolean listOnly;
 
         OrderedClassFiles(PrintWriter out, Options options, Visibility visibility,
-                          Set<String> emittedPackages, SourceLookup sources, ExecutorService executor) {
-            this.out = out;
+                         Set<String> emittedPackages, SourceLookup sources, ExecutorService executor) {
+            super(executor, symbols -> addListedClassSymbols(out, symbols, emittedPackages));
             this.options = options;
             this.visibility = visibility;
-            this.emittedPackages = emittedPackages;
             this.sources = sources;
-            this.executor = executor;
+            this.listOnly = out instanceof SymbolOutput output && output.listOnly();
         }
 
-        void submit(String resourceName, String className, ClassModelReader reader) throws IOException {
-            if (reader == null && pending.isEmpty()) {
-                emit(prepareListedClass(resourceName, className, null, options, visibility, sources));
-                return;
-            }
-            Future<ListedClass> future;
-            if (reader == null) {
-                future = CompletableFuture.completedFuture(prepareListedClass(resourceName, className, null, options, visibility, sources));
+        void submit(ClassInput input, String className) throws IOException, ToolException {
+            if (!options.requiresClassModel(className)) {
+                add(prepareListedClass(input.resource(), className, null, options, visibility, sources, listOnly));
             } else {
-                future = executor.submit(() -> prepareListedClass(resourceName, className, reader.read(), options, visibility,
-                        sources));
-            }
-            pending.addLast(future);
-            if (pending.size() == CLASS_FILE_WINDOW) {
-                emitFirst();
-            }
-        }
-
-        void finish() throws IOException {
-            while (!pending.isEmpty()) {
-                emitFirst();
-            }
-            finished = true;
-        }
-
-        private void emitFirst() throws IOException {
-            emit(await(pending.removeFirst()));
-        }
-
-        private void emit(ListedClass listedClass) {
-            if (listedClass != null) {
-                addListedClassSymbols(out, listedClass, options, visibility, emittedPackages);
-            }
-        }
-
-        private static ListedClass await(Future<ListedClass> future) throws IOException {
-            try {
-                return future.get();
-            } catch (InterruptedException failure) {
-                Thread.currentThread().interrupt();
-                var interrupted = new InterruptedIOException("Interrupted while reading ClassFiles");
-                interrupted.initCause(failure);
-                throw interrupted;
-            } catch (ExecutionException failure) {
-                var cause = failure.getCause();
-                if (cause instanceof IOException exception) {
-                    throw exception;
-                }
-                if (cause instanceof RuntimeException exception) {
-                    throw exception;
-                }
-                if (cause instanceof Error error) {
-                    throw error;
-                }
-                throw new IOException("Failed to read ClassFile", cause);
-            }
-        }
-
-        @Override
-        public void close() {
-            if (!finished) {
-                pending.forEach(future -> future.cancel(true));
-                executor.shutdownNow();
-                executor.close();
+                submit(() -> prepareListedClass(input.resource(), className, CLASS_FILE.parse(input.read()),
+                        options, visibility, sources, listOnly));
             }
         }
     }
 
-    private static void walkFilesInDeclarationOrder(Path directory, PathConsumer consumer) throws IOException, ToolException {
-        List<Path> entries;
-        try (var children = Files.list(directory)) {
-            entries = children.sorted(Comparator.comparingInt(DeclarationSearch::declarationPathOrder)
-                    .thenComparing(path -> path.getFileName().toString()))
-                              .toList();
-        }
-        for (var entry : entries) {
-            if (Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
-                walkFilesInDeclarationOrder(entry, consumer);
-            } else if (Files.isRegularFile(entry)) {
-                consumer.accept(entry);
-            }
-        }
-    }
+    private record ClassContext(
+            ClassModel model,
+            String location,
+            String binaryName,
+            SymbolKind metadataKind,
+            Set<AccessFlag> classFlags,
+            boolean validClass,
+            List<ContextMatch> matches) {}
 
-    private static int declarationPathOrder(Path path) {
-        if (Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) {
-            return 3;
+    private final class SourceClassFiles extends OrderedReads<ClassContext> {
+        private final Options options;
+        private final Visibility visibility;
+        private final SourceLookup sources;
+        private final boolean matchCompiled;
+
+        SourceClassFiles(Options opts, PrintWriter out, Visibility visibility, SourceLookup sources,
+                         Set<String> emittedSources, Set<String> emittedPackages,
+                         Map<String, EnumeratedSource> parsedSources, ExecutorService executor) {
+            super(executor, context -> emitClassSourceContext(opts, out, context,
+                    visibility, sources, emittedSources, emittedPackages, parsedSources));
+            this.options = opts;
+            this.visibility = visibility;
+            this.sources = sources;
+            this.matchCompiled = simpleNameTarget(opts.target()) || relationships != null || opts.source() == SourceScope.NONE;
         }
-        var name = path.getFileName().toString();
-        if (name.equals("module-info.class") || name.equals("module-info.java")) {
-            return 0;
+
+        void submit(ClassInput input) throws IOException, ToolException {
+            submit(() -> prepareClassSourceContext(options, CLASS_FILE.parse(input.read()), input.get(),
+                    visibility, sources, matchCompiled));
         }
-        if (name.equals("package-info.class") || name.equals("package-info.java")) {
-            return 1;
-        }
-        return 2;
     }
 
     void listSourceContexts(Options opts, PrintWriter out) throws IOException, ToolException {
@@ -248,7 +170,8 @@ final class DeclarationSearch {
         var emittedSources = new HashSet<String>();
         var emittedPackages = new HashSet<String>();
         var parsedSources = new HashMap<String, EnumeratedSource>();
-        try (var sources = environment.sources()) {
+        try (var sources = environment.sources();
+             var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             sources.prepareOrdinarySources();
             if (!opts.excludeApplicationClasses()) {
                 if (readsUnnamedModule(opts)) {
@@ -264,7 +187,8 @@ final class DeclarationSearch {
                                 sources,
                                 emittedSources,
                                 emittedPackages,
-                                parsedSources);
+                                parsedSources,
+                                executor);
                     }
                 }
                 for (var module : environment.moduleInputs()) {
@@ -290,7 +214,8 @@ final class DeclarationSearch {
                             sources,
                             emittedSources,
                             emittedPackages,
-                            parsedSources);
+                            parsedSources,
+                            executor);
                     if (opts.kinds().isEmpty() || opts.listsPackages()) {
                         for (var packageName : module.visiblePackages()
                                 .stream()
@@ -305,7 +230,7 @@ final class DeclarationSearch {
                 }
             }
             listSystemSourceContexts(opts, out, visibility, sources, emittedSources, emittedPackages,
-                    parsedSources);
+                    parsedSources, executor);
             listUncompiledSourceContexts(opts, out, sources, emittedSources, emittedPackages);
         }
         out.flush();
@@ -331,79 +256,63 @@ final class DeclarationSearch {
             SourceLookup sources,
             Set<String> emittedSources,
             Set<String> emittedPackages,
-            Map<String, EnumeratedSource> parsedSources)
+            Map<String, EnumeratedSource> parsedSources,
+            ExecutorService executor)
             throws IOException, ToolException {
-        if (!environment.searches(entry)) {
+        if (!environment.searches(entry)
+                || relationships != null && relationships.compiledResources(entry).isEmpty()) {
             return;
         }
-        if (Files.isDirectory(entry)) {
-            walkFilesInDeclarationOrder(entry,
-                    classFile -> {
-                        if (!classFile.toString().endsWith(CLASS_EXT)) {
-                            return;
-                        }
-                        var resourceName = entry.relativize(classFile)
-                                                .toString()
-                                                .replace(File.separatorChar, '/');
-                        if (!filter.test(resourceName)
-                                || !visibleClassResource(resourceName, moduleName, visiblePackages, opts)
-                                || !mayMatchCompiledResource(resourceName)) {
-                            return;
-                        }
-                        emitClassSourceContext(
-                                opts,
-                                out,
-                                ClassFile.of().parse(Files.readAllBytes(classFile)),
-                                unitLocation(classFile),
-                                visibility,
-                                sources,
-                                emittedSources,
-                                emittedPackages,
-                                parsedSources);
-                    });
-        } else if (Files.isRegularFile(entry)) {
-            try (var jar = ClassPaths.openArchive(entry, false)) {
-                var iterator = jarEntries(jar);
-                var origin = "jar:" + entry.toAbsolutePath()
-                        .normalize()
-                        .toUri()
-                        + "!/";
-                while (iterator.hasNext()) {
-                    var jarEntry = iterator.next();
-                    if (!filter.test(jarEntry.getName())
-                            || !visibleClassResource(jarEntry.getName(), moduleName, visiblePackages, opts)
-                            || !mayMatchCompiledResource(jarEntry.getName())) {
-                        continue;
-                    }
-                    if (opts.kinds().isEmpty() || opts.listsPackages()) {
-                        int slash = jarEntry.getName().lastIndexOf('/');
-                        if (slash >= 0) {
-                            var packageName = jarEntry.getName()
-                                    .substring(0, slash)
-                                    .replace('/', '.');
-                            if (!emittedPackages.contains(packageName)) {
-                                var packageInfo = jar.getJarEntry(jarEntry.getName().substring(0, slash + 1) + "package-info.class");
-                                if (packageInfo != null && filter.test(packageInfo.getName()) && visibleClassResource(packageInfo.getName(), moduleName, visiblePackages, opts)) {
-                                    try (var input = jar.getInputStream(packageInfo)) {
-                                        emitClassSourceContext(opts, out, CLASS_FILE.parse(input.readAllBytes()), origin + packageInfo.getRealName(),
-                                                visibility, sources, emittedSources, emittedPackages, parsedSources);
-                                    }
-                                }
+        try (var root = CompiledInputs.Root.open(entry);
+             var classes = new SourceClassFiles(opts, out, visibility, sources, emittedSources, emittedPackages,
+                     parsedSources, executor)) {
+            var scheduledPackages = new HashSet<String>();
+            forEachCompiledInput(entry, root, input -> {
+                var resource = input.resource();
+                if (!filter.test(resource)
+                        || !visibleClassResource(resource, moduleName, visiblePackages, opts)
+                        || !mayMatchCompiledResource(resource)) {
+                    return;
+                }
+                if (root.isArchive() && (opts.kinds().isEmpty() || opts.listsPackages())) {
+                    int slash = resource.lastIndexOf('/');
+                    if (slash >= 0) {
+                        var packageName = resource.substring(0, slash).replace('/', '.');
+                        if (!emittedPackages.contains(packageName) && scheduledPackages.add(packageName)) {
+                            var packageInfo = root.find(resource.substring(0, slash + 1) + "package-info.class");
+                            if (packageInfo != null && filter.test(packageInfo.resource())
+                                    && visibleClassResource(packageInfo.resource(), moduleName, visiblePackages, opts)) {
+                                classes.submit(packageInfo);
                             }
                         }
                     }
-                    try (var input = jar.getInputStream(jarEntry)) {
-                        emitClassSourceContext(opts, out, CLASS_FILE.parse(input.readAllBytes()), origin + jarEntry.getRealName(),
-                                visibility, sources, emittedSources, emittedPackages, parsedSources);
-                    }
+                }
+                classes.submit(input);
+            });
+            classes.finish();
+        }
+    }
+
+    private void forEachCompiledInput(Path path, CompiledInputs.Root root, CompiledInputs.InputConsumer consumer)
+            throws IOException, ToolException {
+        if (relationships == null) {
+            root.forEach(true, consumer);
+        } else {
+            for (var resource : relationships.compiledResources(path)) {
+                var input = root.find(resource);
+                if (input != null) {
+                    consumer.accept(input);
                 }
             }
         }
     }
 
     private boolean mayMatchCompiledResource(String resourceName) {
+        if (relationships == null) {
+            return true;
+        }
         var className = listedClassName(resourceName);
-        return relationships == null || className != null && relationships.mayMatchCompiledClass(className);
+        return className != null && relationships.mayMatchCompiledClass(className);
     }
 
     private static boolean visibleClassResource(String resourceName, String moduleName, Set<String> visiblePackages,
@@ -429,7 +338,8 @@ final class DeclarationSearch {
             SourceLookup sources,
             Set<String> emittedSources,
             Set<String> emittedPackages,
-            Map<String, EnumeratedSource> parsedSources)
+            Map<String, EnumeratedSource> parsedSources,
+            ExecutorService executor)
             throws IOException, ToolException {
         var system = opts.system();
         if (opts.excludeSystemModules() || "none".equals(system)) {
@@ -467,27 +377,24 @@ final class DeclarationSearch {
             try (var moduleDirectories = Files.list(modules)) {
                 for (var module : moduleDirectories.sorted(Comparator.comparing(path -> path.getFileName().toString())).toList()) {
                     var visiblePackages = systemPackages.get(module.getFileName().toString());
-                    if (visiblePackages == null) {
+                    if (visiblePackages == null
+                            || relationships != null && relationships.compiledResources(module).isEmpty()) {
                         continue;
                     }
-                    walkFilesInDeclarationOrder(module, classFile -> {
-                        var resourceName = module.relativize(classFile).toString();
-                        if (!environment.includesSystemResource(module.getFileName().toString(), resourceName)
-                                || !visibleClassResource(resourceName, module.getFileName().toString(), visiblePackages, opts)
-                                || !mayMatchCompiledResource(resourceName)) {
-                            return;
-                        }
-                        emitClassSourceContext(
-                                opts,
-                                out,
-                                ClassFile.of().parse(Files.readAllBytes(classFile)),
-                                unitLocation(classFile),
-                                visibility,
-                                sources,
-                                emittedSources,
-                                emittedPackages,
-                                parsedSources);
-                    });
+                    try (var root = CompiledInputs.Root.open(module);
+                         var classes = new SourceClassFiles(opts, out, visibility, sources, emittedSources, emittedPackages,
+                                 parsedSources, executor)) {
+                        forEachCompiledInput(module, root, input -> {
+                            var resourceName = input.resource();
+                            if (!environment.includesSystemResource(module.getFileName().toString(), resourceName)
+                                    || !visibleClassResource(resourceName, module.getFileName().toString(), visiblePackages, opts)
+                                    || !mayMatchCompiledResource(resourceName)) {
+                                return;
+                            }
+                            classes.submit(input);
+                        });
+                        classes.finish();
+                    }
                     if (opts.kinds().isEmpty() || opts.listsPackages()) {
                         for (var packageName : visiblePackages.stream()
                                 .sorted()
@@ -518,8 +425,64 @@ final class DeclarationSearch {
             Set<String> emittedPackages,
             Map<String, EnumeratedSource> parsedSources)
             throws IOException, ToolException {
-        var metadataKind = metadataKind(model, UsageSearch.displayClassName(model));
-        if (sources.hasOrdinarySource(model) || relationships != null && metadataKind != null) {
+        emitClassSourceContext(opts, out, prepareClassSourceContext(opts, model, classLocation, visibility, sources,
+                        simpleNameTarget(opts.target()) || relationships != null || opts.source() == SourceScope.NONE),
+                visibility, sources, emittedSources, emittedPackages, parsedSources);
+    }
+
+    private static ClassContext prepareClassSourceContext(Options opts, ClassModel model, String location,
+            Visibility visibility, SourceLookup sources, boolean matchCompiled) {
+        var internalName = model.thisClass().asInternalName();
+        // Scans populate the ordinary-source maps before submitting work; workers only read them.
+        if (sources.mayHaveOrdinarySource(internalName) && sources.hasOrdinarySource(model)) {
+            return null;
+        }
+        var binaryName = internalName.replace('/', '.');
+        var metadataKind = metadataKind(model, binaryName);
+        if (metadataKind != null) {
+            return new ClassContext(model, location, binaryName, metadataKind, Set.of(), true, null);
+        }
+        Set<AccessFlag> classFlags;
+        try {
+            classFlags = listedClassFlags(model);
+        } catch (IllegalArgumentException _) {
+            return new ClassContext(model, location, binaryName, null, Set.of(), false, null);
+        }
+        var matches = matchCompiled ? contextMatches(model, binaryName, classFlags, Map.of(), opts, visibility) : null;
+        if (matches != null && matches.isEmpty()
+                && (simpleNameTarget(opts.target()) || opts.source() == SourceScope.NONE)
+                && !mayEmitPackage(opts, binaryName)) {
+            return null;
+        }
+        return new ClassContext(model, location, binaryName, null, classFlags, true, matches);
+    }
+
+    private static boolean mayEmitPackage(Options opts, String binaryName) {
+        if (!opts.kinds().isEmpty() && !opts.listsPackages()) {
+            return false;
+        }
+        int packageEnd = binaryName.lastIndexOf('.');
+        return packageEnd > 0 && matchesListedPrefix(opts, binaryName.substring(0, packageEnd));
+    }
+
+    private void emitClassSourceContext(
+            Options opts,
+            PrintWriter out,
+            ClassContext context,
+            Visibility visibility,
+            SourceLookup sources,
+            Set<String> emittedSources,
+            Set<String> emittedPackages,
+            Map<String, EnumeratedSource> parsedSources)
+            throws IOException, ToolException {
+        if (context == null) {
+            return;
+        }
+        var model = context.model();
+        var classLocation = context.location();
+        var binaryName = context.binaryName();
+        var metadataKind = context.metadataKind();
+        if (relationships != null && metadataKind != null) {
             return;
         }
         if (metadataKind == SymbolKind.MODULE) {
@@ -528,9 +491,8 @@ final class DeclarationSearch {
             }
             return;
         }
-        var packageName = model.thisClass()
-                               .asSymbol()
-                               .packageName();
+        int packageEnd = binaryName.lastIndexOf('.');
+        var packageName = packageEnd < 0 ? "" : binaryName.substring(0, packageEnd);
         if (!packageName.isEmpty()
                 && (opts.kinds().isEmpty() || opts.listsPackages())
                 && emittedPackages.add(packageName)
@@ -547,21 +509,20 @@ final class DeclarationSearch {
         if (metadataKind == SymbolKind.PACKAGE) {
             return;
         }
-        try {
-            listedClassFlags(model);
-        } catch (IllegalArgumentException _) {
+        if (!context.validClass()) {
             return;
         }
-        var className = UsageSearch.displayClassName(model);
+        var classFlags = context.classFlags();
+        var compiledMatches = context.matches();
         if (relationships != null
-                && (!relationships.mayMatchCompiledClass(className)
-                        || relationshipMatches(contextMatches(List.of(model), Map.of(), opts, visibility), false, true)
-                                .isEmpty())) {
+                && (!relationships.mayMatchCompiledClass(binaryName.replace('$', '.'))
+                        || relationshipMatches(compiledMatches, false, true).isEmpty())) {
             return;
         }
-        if (simpleNameTarget(opts.target()) && contextMatches(List.of(model), Map.of(), opts, visibility).isEmpty()) {
+        if (simpleNameTarget(opts.target()) && compiledMatches.isEmpty()) {
             return;
         }
+        var className = binaryName.replace('$', '.');
         var unitName = ClassFileRenderer.compilationUnitName(model, className);
         var sourceFileName = model.findAttribute(Attributes.sourceFile())
                 .map(attribute -> attribute.sourceFile().stringValue())
@@ -599,16 +560,13 @@ final class DeclarationSearch {
                             || opts.source() == SourceScope.BODY
                             || opts.source() == SourceScope.UNIT
                             || opts.source().conciseDeclaration()
-                    ? contextMatches(
-                            List.of(model),
-                            parsed.structure().attribution(),
-                            opts,
-                            visibility)
+                    ? contextMatches(model, binaryName, classFlags, parsed.structure().attribution(), opts, visibility)
                     : contextMatches(parsed.structure(), opts);
         } else {
             symbolSource = new SymbolSource(classLocation, null, unitName, sourceFileName, null,
                     Map.of(), List.of(model));
-            matches = contextMatches(List.of(model), Map.of(), opts, visibility);
+            matches = compiledMatches != null ? compiledMatches
+                    : contextMatches(model, binaryName, classFlags, Map.of(), opts, visibility);
         }
         if (!matches.isEmpty()) {
             printSymbolContext(symbolSource, matches, opts, out);
@@ -707,19 +665,20 @@ final class DeclarationSearch {
             }
             var normalizedRoot = root.toAbsolutePath().normalize();
             var visiblePackages = ordinaryRoots.contains(normalizedRoot) ? null : modulePackages.get(normalizedRoot);
-            walkFilesInDeclarationOrder(
-                    root,
+            walkFiles(
+                    root, JAVA_EXT,
                     sourceFile -> {
-                        if (!sourceFile.toString().endsWith(JAVA_EXT) || !environment.includesSource(root, sourceFile)) {
+                        if (!environment.includesSource(root, sourceFile)) {
                             return;
                         }
                         var origin = unitLocation(sourceFile);
                         if (!emittedSources.add(origin)) {
                             return;
                         }
-                        var model = SourceModel.parse(Files.readAllBytes(sourceFile));
+                        var parsed = relationships != null ? relationships.sourceDeclaration(sourceFile) : null;
+                        var model = parsed != null ? parsed.model() : SourceModel.parse(Files.readAllBytes(sourceFile));
                         var fileName = sourceFile.getFileName().toString();
-                        var structure = model.structure(fileName, visibility);
+                        var structure = parsed != null ? parsed.structure() : model.structure(fileName, visibility);
                         if (structure.classNames().isEmpty() && structure.packageName().isEmpty()) {
                             return;
                         }
@@ -755,9 +714,6 @@ final class DeclarationSearch {
                             }
                         }
                         var unitName = sourceUnitName(structure, fileName);
-                        if (relationships != null) {
-                            relationships.readSourceUnit(unitName);
-                        }
                         var matches = contextMatches(structure, opts);
                         if (matches.isEmpty()) {
                             return;
@@ -910,21 +866,18 @@ final class DeclarationSearch {
                     if (exportedPackages == null) {
                         continue;
                     }
-                    try (var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
-                        walkFilesInDeclarationOrder(
-                                module,
-                            file -> {
-                                var resourceName = module.relativize(file).toString();
-                                var className = listedClassName(resourceName);
-                                if (className == null
-                                        || !includesClassEntry(opts, className)
-                                        || !isExportedClassResource(resourceName, exportedPackages)
-                                        || !environment.includesSystemResource(module.getFileName().toString(), resourceName)) {
-                                    return;
-                                }
-                                    classes.submit(resourceName, className,
-                                            opts.requiresClassModel(className) ? () -> CLASS_FILE.parse(readClassFile(file)) : null);
-                            });
+                    try (var root = CompiledInputs.Root.open(module);
+                         var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
+                        root.forEach(true, input -> {
+                            var resource = input.resource();
+                            var className = listedClassName(resource);
+                            if (className != null
+                                    && includesClassEntry(opts, className)
+                                    && isExportedClassResource(resource, exportedPackages)
+                                    && environment.includesSystemResource(module.getFileName().toString(), resource)) {
+                                classes.submit(input, className);
+                            }
+                        });
                         classes.finish();
                     }
                     emitSynthesizedPackages(out, opts, exportedPackages, emittedPackages);
@@ -950,40 +903,15 @@ final class DeclarationSearch {
             if (!environment.searches(entry)) {
                 continue;
             }
-            if (Files.isDirectory(entry)) {
-                try (var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
-                    walkFilesInDeclarationOrder(
-                            entry,
-                        file -> {
-                            var resourceName = entry.relativize(file)
-                                                    .toString()
-                                                    .replace(File.separatorChar, '/');
-                            var className = listedClassName(resourceName);
-                                if (className == null || className.equals("module-info") || !includesClassEntry(opts, className)) {
-                                return;
-                            }
-                                classes.submit(resourceName, className,
-                                        opts.requiresClassModel(className) ? () -> CLASS_FILE.parse(readClassFile(file)) : null);
-                        });
-                    classes.finish();
-                }
-            } else if (Files.isRegularFile(entry)) {
-                try (var jar = ClassPaths.openArchive(entry, false);
-                     var archive = openParallelArchive(entry);
-                     var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
-                    var iterator = jarEntries(jar);
-                    while (iterator.hasNext()) {
-                        var jarEntry = iterator.next();
-                        var className = listedClassName(jarEntry.getName());
-                        if (className == null || className.equals("module-info") || !includesClassEntry(opts, className)) {
-                            continue;
-                        }
-                        var classFile = archive.getPath(jarEntry.getRealName());
-                        classes.submit(jarEntry.getName(), className,
-                                opts.requiresClassModel(className) ? () -> CLASS_FILE.parse(readClassFile(classFile)) : null);
+            try (var root = CompiledInputs.Root.open(entry);
+                 var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
+                root.forEach(true, input -> {
+                    var className = listedClassName(input.resource());
+                    if (className != null && !className.equals("module-info") && includesClassEntry(opts, className)) {
+                        classes.submit(input, className);
                     }
-                    classes.finish();
-                }
+                });
+                classes.finish();
             }
         }
     }
@@ -1017,40 +945,15 @@ final class DeclarationSearch {
                     out.println(module.name() + ": " + renderAutomaticModuleDeclaration(module.descriptor()));
                 }
             }
-            if (Files.isDirectory(entry)) {
-                try (var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
-                    walkFilesInDeclarationOrder(
-                            entry,
-                        file -> {
-                            var resourceName = entry.relativize(file)
-                                                    .toString()
-                                                    .replace(File.separatorChar, '/');
-                            var className = listedClassName(resourceName);
-                                if (className == null || !includesClassEntry(opts, className) || !module.visibleResource(resourceName)) {
-                                return;
-                            }
-                                classes.submit(resourceName, className,
-                                        opts.requiresClassModel(className) ? () -> CLASS_FILE.parse(readClassFile(file)) : null);
-                        });
-                    classes.finish();
-                }
-            } else if (Files.isRegularFile(entry)) {
-                try (var jar = ClassPaths.openArchive(entry, false);
-                     var archive = openParallelArchive(entry);
-                     var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
-                    var iterator = jarEntries(jar);
-                    while (iterator.hasNext()) {
-                        var jarEntry = iterator.next();
-                        var className = listedClassName(jarEntry.getName());
-                        if (className == null || !includesClassEntry(opts, className) || !module.visibleResource(jarEntry.getName())) {
-                            continue;
-                        }
-                        var classFile = archive.getPath(jarEntry.getRealName());
-                        classes.submit(jarEntry.getName(), className,
-                                opts.requiresClassModel(className) ? () -> CLASS_FILE.parse(readClassFile(classFile)) : null);
+            try (var root = CompiledInputs.Root.open(entry);
+                 var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
+                root.forEach(true, input -> {
+                    var className = listedClassName(input.resource());
+                    if (className != null && includesClassEntry(opts, className) && module.visibleResource(input.resource())) {
+                        classes.submit(input, className);
                     }
-                    classes.finish();
-                }
+                });
+                classes.finish();
             }
             emitSynthesizedPackages(out, opts, module.visiblePackages(), emittedPackages);
         }
@@ -1063,9 +966,9 @@ final class DeclarationSearch {
                 if (!environment.searches(sourceRoot) || !Files.isDirectory(sourceRoot)) {
                     continue;
                 }
-                walkFilesInDeclarationOrder(sourceRoot,
+                walkFiles(sourceRoot, JAVA_EXT,
                         sourceFile -> {
-                            if (!sourceFile.toString().endsWith(JAVA_EXT) || !environment.includesSource(sourceRoot, sourceFile)) {
+                            if (!environment.includesSource(sourceRoot, sourceFile)) {
                                 return;
                             }
                             var task = (JavacTask) compiler.getTask(null, fileManager, null, List.of("-proc:none"), null,
@@ -1101,57 +1004,11 @@ final class DeclarationSearch {
         return !opts.listsOnlyTypes() || matchesListedPrefix(opts, className);
     }
 
-    private static FileSystem openParallelArchive(Path archive) throws IOException {
-        // ZipFile serializes reads through one RandomAccessFile; zipfs uses positional FileChannel reads.
-        return FileSystems.newFileSystem(archive);
-    }
-
-    private static Iterator<JarEntry> jarEntries(JarFile jar) {
-        return jar.isMultiRelease() ? jar.versionedStream().iterator() : jar.entries().asIterator();
-    }
-
-    private static byte[] readClassFile(Path file) throws IOException {
-        long size = Files.size(file);
-        if (size < 0 || size > Integer.MAX_VALUE) {
-            return Files.readAllBytes(file);
-        }
-        var bytes = new byte[(int) size];
-        try (var input = Files.newInputStream(file)) {
-            int read = input.readNBytes(bytes, 0, bytes.length);
-            if (read != bytes.length) {
-                throw new EOFException("Expected " + bytes.length + " bytes for " + file + ", read " + read);
-            }
-        }
-        return bytes;
-    }
-
-    private static byte[] readJarEntry(JarFile jar, JarEntry entry) throws IOException {
-        long size = entry.getSize();
-        if (size < 0 || size > Integer.MAX_VALUE) {
-            try (var input = jar.getInputStream(entry)) {
-                return input.readAllBytes();
-            }
-        }
-        var bytes = new byte[(int) size];
-        try (var input = jar.getInputStream(entry)) {
-            int read = input.readNBytes(bytes, 0, bytes.length);
-            if (read != bytes.length) {
-                throw new EOFException("Expected "
-                        + bytes.length
-                        + " bytes for "
-                        + entry.getName()
-                        + ", read "
-                        + read);
-            }
-        }
-        return bytes;
-    }
-
-    private static ListedClass prepareListedClass(String resourceName, String className, ClassModel model,
-            Options opts, Visibility visibility, SourceLookup sources) {
+    private static List<ListedSymbol> prepareListedClass(String resourceName, String className, ClassModel model,
+            Options opts, Visibility visibility, SourceLookup sources, boolean listOnly) {
         if (model != null && sources.mayHaveOrdinarySource(resourceName) && sources.hasOrdinarySource(model)) {
             return null;
-            }
+        }
         var metadataKind = metadataKind(model, className);
         var packageName = !opts.listsPackages()
                 ? ""
@@ -1163,35 +1020,35 @@ final class DeclarationSearch {
         if (metadataKind == SymbolKind.PACKAGE
                 || metadataKind == SymbolKind.MODULE
                 || !opts.listsTypes() && !opts.listsMethods() && !opts.listsFields()) {
-            return new ListedClass(className, model, metadataKind, packageName, true, false,
-                    null);
+            return prepareListedSymbols(className, model, opts, visibility, metadataKind, packageName,
+                    true, false, null, listOnly);
         }
+        boolean visibleType;
+        SymbolKind kind;
         try {
-            var visibleType = model == null || visibility.visible(resourceName.indexOf('$') < 0 ? model.flags().flags() : listedClassFlags(model));
-            var kind = opts.listsTypes() ? SymbolKind.classKind(model) : null;
-            return new ListedClass(className, model, metadataKind, packageName, true, visibleType,
-                    kind);
+            visibleType = model == null || visibility.visible(resourceName.indexOf('$') < 0 ? model.flags().flags() : listedClassFlags(model));
+            kind = opts.listsTypes() ? SymbolKind.classKind(model) : null;
         } catch (IllegalArgumentException _) {
             // VM-generated JDK holder classes can carry member-only visibility bits.
-            return new ListedClass(className, model, metadataKind, packageName, false, false,
-                    null);
+            return prepareListedSymbols(className, model, opts, visibility, metadataKind, packageName,
+                    false, false, null, listOnly);
         }
+        return prepareListedSymbols(className, model, opts, visibility, metadataKind, packageName,
+                true, visibleType, kind, listOnly);
     }
 
-    private static void addListedClassSymbols(PrintWriter out, ListedClass listedClass, Options opts,
-            Visibility visibility, Set<String> emittedPackages) {
-        addListedSymbols(
-                out,
-                listedClass.className(),
-                listedClass.model(),
-                opts,
-                visibility,
-                emittedPackages,
-                listedClass.metadataKind(),
-                listedClass.packageName(),
-                listedClass.validClass(),
-                listedClass.visibleType(),
-                listedClass.kind());
+    private static void addListedClassSymbols(PrintWriter out, List<ListedSymbol> symbols, Set<String> emittedPackages) {
+        if (symbols == null) {
+            return;
+        }
+        for (var symbol : symbols) {
+            if (symbol.kind() == SymbolKind.PACKAGE && !emittedPackages.add(symbol.name())) {
+                continue;
+            }
+            if (!printListSymbol(out, symbol.kind(), symbol.name(), null)) {
+                out.println(symbol.unitName() + ": " + symbol.declaration());
+            }
+        }
     }
 
     private static void addListedSymbols(PrintWriter out, String className, ClassModel model,
@@ -1234,97 +1091,81 @@ final class DeclarationSearch {
                 validClass = false;
             }
         }
-        addListedSymbols(out, className, model, opts, visibility, emittedPackages,
-                metadataKind, packageName, validClass, visibleType, kind);
+        boolean listOnly = out instanceof SymbolOutput output && output.listOnly();
+        addListedClassSymbols(out, prepareListedSymbols(className, model, opts, visibility,
+                metadataKind, packageName, validClass, visibleType, kind, listOnly), emittedPackages);
     }
 
-    private static void addListedSymbols(
-            PrintWriter out,
+    private static List<ListedSymbol> prepareListedSymbols(
             String className,
             ClassModel model,
             Options opts,
             Visibility visibility,
-            Set<String> emittedPackages,
             SymbolKind metadataKind,
             String packageName,
             boolean validClass,
             boolean visibleType,
-            SymbolKind kind) {
-        var listOnly = out instanceof SymbolOutput output && output.listOnly();
-        if (!packageName.isEmpty()
-                && opts.listsPackages()
-                && emittedPackages.add(packageName)
-                && matchesListedPrefix(opts, packageName)) {
+            SymbolKind kind,
+            boolean listOnly) {
+        var symbols = new ArrayList<ListedSymbol>();
+        if (!packageName.isEmpty() && opts.listsPackages() && matchesListedPrefix(opts, packageName)) {
             String declaration = null;
             if (!listOnly) {
                 var rendered = new StringBuilder();
-            if (metadataKind == SymbolKind.PACKAGE && model != null) {
+                if (metadataKind == SymbolKind.PACKAGE && model != null) {
                     appendDeclarationAnnotations(rendered, model);
+                }
+                declaration = rendered.append("package ").append(packageName).append(';').toString();
             }
-                declaration = rendered.append("package ")
-                       .append(packageName)
-                                      .append(';')
-                                      .toString();
-        }
-            printListedSymbol(out, opts, SymbolKind.PACKAGE, packageName, packageName, declaration);
-        }
-        if (metadataKind == SymbolKind.PACKAGE || !validClass) {
-            return;
+            symbols.add(new ListedSymbol(SymbolKind.PACKAGE, packageName, packageName, declaration));
         }
         if (metadataKind == SymbolKind.MODULE) {
             if (model != null && opts.listsModules()) {
                 var moduleName = compiledModuleName(model);
                 if (moduleName != null && matchesListedPrefix(opts, moduleName)) {
-                    printListedSymbol(out, opts, SymbolKind.MODULE, moduleName, moduleName,
-                            listOnly ? null : renderModuleDeclaration(model));
+                    symbols.add(new ListedSymbol(SymbolKind.MODULE, moduleName, moduleName,
+                            listOnly ? null : renderModuleDeclaration(model)));
                 }
             }
-            return;
-        }
-        if (!opts.listsTypes() && !opts.listsMethods() && !opts.listsFields()) {
-            return;
-        }
-        var unitName = listOnly ? null : ClassFileRenderer.compilationUnitName(model, className);
-        if (visibleType && opts.listsType(kind) && matchesListedPrefix(opts, className)) {
-            printListedSymbol(out, opts, kind, unitName, className,
-                    listOnly ? null : renderTypeDeclaration(model));
-        }
-        if (!opts.listsMethods() && !opts.listsFields()) {
-            return;
-        }
-
-        if (opts.listsFields()) {
-            for (int i = 0; i < model.fields().size(); i++) {
-                var field = model.fields().get(i);
-                if (!field.flags().has(AccessFlag.SYNTHETIC) && visibility.visible(field.flags()) && firstFieldNamed(model, i,
-                        field.fieldName().stringValue())) {
-                    var symbol = listedMemberTarget(opts, className,
-                            field.fieldName().stringValue());
-                    if (matchesListedPrefix(opts, symbol)) {
-                        printListedSymbol(out, opts, SymbolKind.FIELD, unitName, symbol,
-                                listOnly ? null : renderFieldDeclaration(field));
+        } else if (metadataKind != SymbolKind.PACKAGE && validClass
+                && (opts.listsTypes() || opts.listsMethods() || opts.listsFields())) {
+            var unitName = listOnly ? null : ClassFileRenderer.compilationUnitName(model, className);
+            if (visibleType && opts.listsType(kind) && matchesListedPrefix(opts, className)) {
+                symbols.add(new ListedSymbol(kind, unitName, className,
+                        listOnly ? null : renderTypeDeclaration(model)));
+            }
+            if (opts.listsFields()) {
+                for (int i = 0; i < model.fields().size(); i++) {
+                    var field = model.fields().get(i);
+                    if (!field.flags().has(AccessFlag.SYNTHETIC) && visibility.visible(field.flags()) && firstFieldNamed(model, i,
+                            field.fieldName().stringValue())) {
+                        var symbol = matchingMemberSymbol(opts, className, field.fieldName().stringValue());
+                        if (symbol != null) {
+                            symbols.add(new ListedSymbol(SymbolKind.FIELD, unitName, symbol,
+                                    listOnly ? null : renderFieldDeclaration(field)));
+                        }
+                    }
+                }
+            }
+            if (opts.listsMethods()) {
+                for (var method : model.methods()) {
+                    if (method.flags().has(AccessFlag.SYNTHETIC) || method.flags().has(AccessFlag.BRIDGE) || !visibility.visible(method.flags())) {
+                        continue;
+                    }
+                    var name = method.methodName().stringValue();
+                    if (ConstantDescs.CLASS_INIT_NAME.equals(name)) {
+                        continue;
+                    }
+                    var queryName = ConstantDescs.INIT_NAME.equals(name) ? "new" : name;
+                    var symbol = matchingMemberSymbol(opts, className, queryName);
+                    if (symbol != null) {
+                        symbols.add(new ListedSymbol(SymbolKind.METHOD, unitName, listedMethodSignature(className, method),
+                                listOnly ? null : renderMethodDeclaration(model, method)));
                     }
                 }
             }
         }
-        if (opts.listsMethods()) {
-            for (int i = 0; i < model.methods().size(); i++) {
-                var method = model.methods().get(i);
-                if (method.flags().has(AccessFlag.SYNTHETIC) || method.flags().has(AccessFlag.BRIDGE) || !visibility.visible(method.flags())) {
-                    continue;
-                }
-                var name = method.methodName().stringValue();
-                if (ConstantDescs.CLASS_INIT_NAME.equals(name)) {
-                    continue;
-                }
-                var queryName = ConstantDescs.INIT_NAME.equals(name) ? "new" : name;
-                var symbol = listedMemberTarget(opts, className, queryName);
-                if (matchesListedPrefix(opts, symbol)) {
-                    printListedSymbol(out, opts, SymbolKind.METHOD, unitName, symbol,
-                            listedMethodSignature(className, method), listOnly ? null : renderMethodDeclaration(model, method));
-                }
-            }
-        }
+        return symbols.isEmpty() ? null : List.copyOf(symbols);
     }
 
     private static void printListedSymbol(PrintWriter out, Options opts, SymbolKind kind,
@@ -1410,28 +1251,34 @@ final class DeclarationSearch {
         return name + "[]".repeat(dimensions);
     }
 
-    private static String listedMemberTarget(Options opts, String className, String memberName) {
-        return className + "." + memberName;
+    private static String matchingMemberSymbol(Options opts, String className, String memberName) {
+        if (simpleNameTarget(opts.target())) {
+            return matchesListedPrefix(opts, memberName) ? className + "." + memberName : null;
+        }
+        var symbol = className + "." + memberName;
+        return matchesListedPrefix(opts, symbol) ? symbol : null;
     }
 
     private static boolean matchesListedPrefix(Options opts, String symbol) {
-        if (opts.target() == null) {
+        var prefix = opts.target();
+        if (prefix == null) {
             return true;
         }
-        var prefix = opts.target();
+        boolean simple = simpleNameTarget(prefix);
+        int start = simple ? symbol.lastIndexOf('.') + 1 : 0;
         if (opts.listOnly() && prefix.indexOf('*') >= 0) {
-            var candidate = simpleNameTarget(prefix) ? UsageSearch.terminalName(symbol) : symbol;
-            return wildcardMatches(prefix, candidate);
+            return wildcardMatches(prefix, symbol, start);
         }
-        if (simpleNameTarget(prefix)) {
-            return UsageSearch.terminalName(symbol).equals(prefix);
+        if (simple) {
+            return symbol.length() - start == prefix.length() && symbol.startsWith(prefix, start);
         }
-        return symbol.equals(prefix) || symbol.startsWith(prefix + ".");
+        return symbol.startsWith(prefix)
+                && (symbol.length() == prefix.length() || symbol.charAt(prefix.length()) == '.');
     }
 
-    private static boolean wildcardMatches(String pattern, String candidate) {
+    private static boolean wildcardMatches(String pattern, String candidate, int start) {
         int patternIndex = 0;
-        int candidateIndex = 0;
+        int candidateIndex = start;
         int wildcardIndex = -1;
         int wildcardCandidateIndex = -1;
         while (candidateIndex < candidate.length()) {
@@ -1622,8 +1469,7 @@ final class DeclarationSearch {
                             .getParentPath()
                             .getLeaf() instanceof ClassTree owner
                     && firstSourceFieldNamed(owner, tree)) {
-                var symbol = listedMemberTarget(opts, classNames.getLast(),
-                        tree.getName().toString());
+                var symbol = classNames.getLast() + "." + tree.getName();
                 printListedSymbol(out, opts, SymbolKind.FIELD, unitName, symbol,
                         compactSourceLine(tree.toString()) + ";", sourceRange(tree));
             }
@@ -1646,7 +1492,7 @@ final class DeclarationSearch {
                         .filter(member -> member instanceof MethodTree method && method.getName().contentEquals(keyName))
                         .count();
                 if (selectedDeclaration.test(attributionKey(classNames.getLast(), keyName, ordinal))) {
-                    var symbol = listedMemberTarget(opts, classNames.getLast(), name);
+                    var symbol = classNames.getLast() + "." + name;
                     printListedSymbol(out, opts, SymbolKind.METHOD, unitName, symbol,
                             listedSourceMethodSignature(classNames.getLast(), tree), renderSourceMethodDeclaration(tree),
                             sourceRange(tree));
@@ -2322,45 +2168,63 @@ final class DeclarationSearch {
         var selected = opts.kinds().isEmpty() ? opts.withKinds(defaultKinds()) : opts;
         var matches = new ArrayList<ContextMatch>();
         for (var model : classes) {
-            var owner = attributionKey(model).replace('$', '.');
-            if (selected.listsType(model) && visibility.visible(listedClassFlags(model)) && matchesListedPrefix(selected, owner)) {
-                matches.add(new ContextMatch(owner, owner, SymbolKind.classKind(model), owner,
-                        attribution.getOrDefault(owner, Attribution.EMPTY)));
-            }
-            if (selected.listsFields()) {
-                for (var field : model.fields()) {
-                    if (field.flags().has(AccessFlag.SYNTHETIC) || !visibility.visible(field.flags())) {
-                        continue;
-                    }
-                    var symbol = owner + "." + field.fieldName().stringValue();
-                    if (matchesListedPrefix(selected, symbol)) {
-                        matches.add(new ContextMatch(attributionKey(model, field), symbol, SymbolKind.FIELD, symbol,
-                                attribution.getOrDefault(attributionKey(model, field), Attribution.EMPTY)));
-                    }
+            matches.addAll(contextMatches(model, attributionKey(model),
+                    selected.listsType(model) ? listedClassFlags(model) : Set.of(), attribution, selected, visibility));
+        }
+        return matches;
+    }
+
+    private static List<ContextMatch> contextMatches(ClassModel model, String binaryName, Set<AccessFlag> classFlags,
+            Map<String, Attribution> attribution, Options opts, Visibility visibility) {
+        var selected = opts.kinds().isEmpty() ? opts.withKinds(defaultKinds()) : opts;
+        var simpleTarget = simpleNameTarget(selected.target()) && selected.target().indexOf('*') < 0 ? selected.target() : null;
+        var methodTarget = "new".equals(simpleTarget) ? ConstantDescs.INIT_NAME : simpleTarget;
+        var matches = new ArrayList<ContextMatch>();
+        var owner = binaryName.replace('$', '.');
+        if (matchesListedPrefix(selected, owner) && selected.listsType(model) && visibility.visible(classFlags)) {
+            matches.add(new ContextMatch(owner, owner, SymbolKind.classKind(model), owner,
+                    attribution.getOrDefault(owner, Attribution.EMPTY)));
+        }
+        if (selected.listsFields()) {
+            for (var field : model.fields()) {
+                if (simpleTarget != null && !field.fieldName().equalsString(simpleTarget)) {
+                    continue;
+                }
+                if (field.flags().has(AccessFlag.SYNTHETIC) || !visibility.visible(field.flags())) {
+                    continue;
+                }
+                var symbol = owner + "." + field.fieldName().stringValue();
+                if (matchesListedPrefix(selected, symbol)) {
+                    var key = binaryName + "#" + field.fieldName().stringValue();
+                    matches.add(new ContextMatch(key, symbol, SymbolKind.FIELD, symbol,
+                            attribution.getOrDefault(key, Attribution.EMPTY)));
                 }
             }
-            if (selected.listsMethods()) {
-                var ordinals = new HashMap<String, Integer>();
-                for (var method : model.methods()) {
-                    var name = method.methodName().stringValue();
-                    var keyName = ConstantDescs.INIT_NAME.equals(name) ? "<init>" : name;
-                    int ordinal = ordinals.merge(keyName, 0, Integer::sum);
-                    ordinals.put(keyName, ordinal + 1);
-                    if (method.flags().has(AccessFlag.SYNTHETIC)
-                            || method.flags().has(AccessFlag.BRIDGE)
-                            || !visibility.visible(method.flags())
-                            || ConstantDescs.CLASS_INIT_NAME.equals(name)) {
-                        continue;
-                    }
-                    if (model.flags().has(AccessFlag.ENUM) && (name.equals("values") || name.equals("valueOf"))) {
-                        continue;
-                    }
-                    var publicName = ConstantDescs.INIT_NAME.equals(name) ? "new" : name;
-                    var symbol = owner + "." + publicName;
-                    if (matchesListedPrefix(selected, symbol)) {
-                        matches.add(new ContextMatch(attributionKey(owner, keyName, ordinal), symbol, SymbolKind.METHOD, listedMethodSignature(owner, method),
-                                attribution.getOrDefault(attributionKey(attributionKey(model), keyName, ordinal), Attribution.EMPTY)));
-                    }
+        }
+        if (selected.listsMethods()) {
+            var ordinals = new HashMap<String, Integer>();
+            for (var method : model.methods()) {
+                if (methodTarget != null && !method.methodName().equalsString(methodTarget)) {
+                    continue;
+                }
+                var name = method.methodName().stringValue();
+                var keyName = ConstantDescs.INIT_NAME.equals(name) ? "<init>" : name;
+                int ordinal = ordinals.merge(keyName, 0, Integer::sum);
+                ordinals.put(keyName, ordinal + 1);
+                if (method.flags().has(AccessFlag.SYNTHETIC)
+                        || method.flags().has(AccessFlag.BRIDGE)
+                        || !visibility.visible(method.flags())
+                        || ConstantDescs.CLASS_INIT_NAME.equals(name)) {
+                    continue;
+                }
+                if (model.flags().has(AccessFlag.ENUM) && (name.equals("values") || name.equals("valueOf"))) {
+                    continue;
+                }
+                var publicName = ConstantDescs.INIT_NAME.equals(name) ? "new" : name;
+                var symbol = owner + "." + publicName;
+                if (matchesListedPrefix(selected, symbol)) {
+                    matches.add(new ContextMatch(attributionKey(owner, keyName, ordinal), symbol, SymbolKind.METHOD, listedMethodSignature(owner, method),
+                            attribution.getOrDefault(attributionKey(binaryName, keyName, ordinal), Attribution.EMPTY)));
                 }
             }
         }

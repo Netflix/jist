@@ -53,6 +53,14 @@ public final class SourceModel {
             source = new char[decoded.remaining()];
             decoded.get(source);
         }
+        return fromCharacters(source);
+    }
+
+    static SourceModel parse(CharSequence content) {
+        return fromCharacters(content.toString().toCharArray());
+    }
+
+    private static SourceModel fromCharacters(char[] source) {
         int lineCount = 1;
         for (var ch : source) {
             if (ch == '\n') {
@@ -150,21 +158,25 @@ public final class SourceModel {
                 return new SourceStructure("", List.of(), Map.of(),
                         Map.of(), Map.of(), Set.of());
             }
-            var unit = parsed.next();
-            var scanner = new AttributionScanner(unit, trees, documentation, visibility, source, sourceName);
-            scanner.scan(unit, null);
-            var selected = new HashSet<>(scanner.result.keySet());
-            selected.removeAll(scanner.unselectedTypes);
-            return new SourceStructure(
-                    unit.getPackageName() != null ? unit.getPackageName().toString() : "",
-                    List.copyOf(scanner.classNames),
-                    Map.copyOf(scanner.result),
-                    Map.copyOf(scanner.kinds),
-                    Map.copyOf(scanner.listedNames),
-                    Set.copyOf(selected));
+            return structure(sourceName, visibility, parsed.next(), trees, documentation);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    SourceStructure structure(String sourceName, Visibility visibility, CompilationUnitTree unit, Trees trees,
+                              boolean documentation) {
+        var scanner = new AttributionScanner(unit, trees, documentation, visibility, source, sourceName);
+        scanner.scan(unit, null);
+        var selected = new HashSet<>(scanner.result.keySet());
+        selected.removeAll(scanner.unselectedTypes);
+        return new SourceStructure(
+                unit.getPackageName() != null ? unit.getPackageName().toString() : "",
+                List.copyOf(scanner.classNames),
+                Map.copyOf(scanner.result),
+                Map.copyOf(scanner.kinds),
+                Map.copyOf(scanner.listedNames),
+                Set.copyOf(selected));
     }
 
     record SourceStructure(String packageName, List<String> classNames, Map<String, Attribution> attribution,

@@ -38,6 +38,7 @@ final class RelationshipSearch implements Closeable {
     private Set<String> compiledSubtypes = Set.of();
     private Set<String> compiledOverrideOwners = Set.of();
     private Set<String> sourceAffected = Set.of();
+    private Map<String, List<String>> compiledResources = Map.of();
 
     private RelationshipSearch(Options options, SearchEnvironment environment) {
         this.options = options;
@@ -47,10 +48,37 @@ final class RelationshipSearch implements Closeable {
 
     private JavaAnalysis analysis() throws IOException, ToolException {
         if (analysis == null) {
-            analysis = JavaAnalysis.open(options, environment, List.of());
+            if (options.subtypes().isEmpty() && options.overrides().isEmpty()) {
+                analysis = JavaAnalysis.open(options, environment, List.of());
+            } else {
+                var visibility = options.visibility() != null ? options.visibility() : Visibility.ALL;
+                analysis = JavaAnalysis.openSources(options, environment, sourceFiles(), visibility);
+            }
             elements = analysis.elements();
         }
         return analysis;
+    }
+
+    private List<Path> sourceFiles() throws IOException, ToolException {
+        var files = new LinkedHashSet<Path>();
+        var ordinaryRoots = SearchEnvironment.parsePathList(options.sourcePath()).stream()
+                .map(path -> path.toAbsolutePath().normalize())
+                .collect(Collectors.toUnmodifiableSet());
+        var ordinaryResources = new HashSet<Path>();
+        try (var sources = environment.sources()) {
+            for (var root : sources.explicitPaths()) {
+                if (environment.searches(root)) {
+                    boolean ordinary = ordinaryRoots.contains(root.toAbsolutePath().normalize());
+                    CompiledInputs.walkFiles(root, ".java", file -> {
+                        if (environment.includesSource(root, file)
+                                && (!ordinary || ordinaryResources.add(root.relativize(file)))) {
+                            files.add(file.toAbsolutePath().normalize());
+                        }
+                    });
+                }
+            }
+        }
+        return List.copyOf(files);
     }
 
     static RelationshipSearch open(Options options, SearchEnvironment environment) throws IOException, ToolException {
@@ -106,6 +134,7 @@ final class RelationshipSearch implements Closeable {
                                 .collect(Collectors.toUnmodifiableSet());
                         search.compiledOverrideOwners = hierarchy.overrideOwners(owners);
                     }
+                    search.compiledResources = hierarchy.compiledResources(search::mayMatchCompiledClass);
                 }
             }
             if (search.analysis != null) {
@@ -126,8 +155,12 @@ final class RelationshipSearch implements Closeable {
         return supertypes.stream().sorted().toList();
     }
 
-    void readSourceUnit(String name) throws IOException, ToolException {
-        analysis().readSourceUnit(name);
+    JavaAnalysis.SourceDeclaration sourceDeclaration(Path source) throws IOException, ToolException {
+        return analysis().sourceDeclaration(source);
+    }
+
+    List<String> compiledResources(Path root) {
+        return compiledResources.getOrDefault(SearchEnvironment.unitLocation(root), List.of());
     }
 
     boolean mayMatchCompiledClass(String name) {

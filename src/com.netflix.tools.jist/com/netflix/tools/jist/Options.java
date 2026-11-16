@@ -87,7 +87,7 @@ public record Options(
     }
 
     boolean listsTypes() {
-        return kinds.isEmpty() || kinds.stream().anyMatch(SymbolKind::isType);
+        return kinds.isEmpty() || kinds.contains(SymbolKind.TYPE) || kinds.stream().anyMatch(SymbolKind::isType);
     }
 
     boolean listsOnlyTypes() {
@@ -95,7 +95,7 @@ public record Options(
     }
 
     boolean listsType(ClassModel model) {
-        return listsType(SymbolKind.classKind(model));
+        return kinds.isEmpty() || kinds.contains(SymbolKind.TYPE) || listsType(SymbolKind.classKind(model));
     }
 
     boolean listsType(SymbolKind kind) {

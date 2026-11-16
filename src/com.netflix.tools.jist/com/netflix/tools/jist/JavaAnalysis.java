@@ -31,6 +31,7 @@ import javax.tools.StandardJavaFileManager;
 import javax.tools.ToolProvider;
 
 import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.util.DocTrees;
 import com.sun.source.util.JavacTask;
 import com.sun.source.util.Trees;
 
@@ -45,6 +46,9 @@ final class JavaAnalysis implements Closeable {
     private final Map<ExecutableElement, String> descriptors = new IdentityHashMap<>();
     private final Map<ExecutableElement, String> signatures = new IdentityHashMap<>();
     private final Map<ExecutableElement, String> keys = new IdentityHashMap<>();
+    private final Map<Path, SourceDeclaration> sourceDeclarations = new HashMap<>();
+
+    record SourceDeclaration(SourceModel model, SourceModel.SourceStructure structure) {}
 
     private JavaAnalysis(StandardJavaFileManager fileManager, DiagnosticCollector<JavaFileObject> diagnostics,
             SearchEnvironment environment, JavacTask task, List<CompilationUnitTree> units) {
@@ -57,6 +61,16 @@ final class JavaAnalysis implements Closeable {
 
     static JavaAnalysis open(Options options, SearchEnvironment environment, List<Path> sourceFiles)
             throws IOException, ToolException {
+        return open(options, environment, sourceFiles, null);
+    }
+
+    static JavaAnalysis openSources(Options options, SearchEnvironment environment, List<Path> sourceFiles,
+                                    Visibility visibility) throws IOException, ToolException {
+        return open(options, environment, sourceFiles, visibility);
+    }
+
+    private static JavaAnalysis open(Options options, SearchEnvironment environment, List<Path> sourceFiles,
+                                     Visibility sourceVisibility) throws IOException, ToolException {
         var compiler = ToolProvider.getSystemJavaCompiler();
         var diagnostics = new DiagnosticCollector<JavaFileObject>();
         var manager = compiler.getStandardFileManager(diagnostics, Locale.ROOT, StandardCharsets.UTF_8);
@@ -76,8 +90,23 @@ final class JavaAnalysis implements Closeable {
             var task = (JavacTask) compiler.getTask(null, manager, diagnostics, arguments, null, inputs);
             var units = new ArrayList<CompilationUnitTree>();
             task.parse().forEach(units::add);
-            task.analyze();
             var analysis = new JavaAnalysis(manager, diagnostics, environment, task, List.copyOf(units));
+            if (sourceVisibility == null) {
+                task.analyze();
+            } else {
+                // Capture literal declarations before entering adds implicit constructors and members.
+                var trees = DocTrees.instance(task);
+                for (var unit : units) {
+                    var file = unit.getSourceFile();
+                    if (file.toUri().getScheme().equals("file")) {
+                        var path = Path.of(file.toUri()).toAbsolutePath().normalize();
+                        var model = SourceModel.parse(file.getCharContent(true));
+                        analysis.sourceDeclarations.put(path, new SourceDeclaration(model,
+                                model.structure(path.getFileName().toString(), sourceVisibility, unit, trees, true)));
+                    }
+                }
+                // Element queries complete signatures on demand without attributing unrelated bodies.
+            }
             analysis.checkDiagnostics();
             return analysis;
         } catch (IOException | ToolException | RuntimeException | Error e) {
@@ -143,9 +172,15 @@ final class JavaAnalysis implements Closeable {
         return type;
     }
 
+    SourceDeclaration sourceDeclaration(Path source) {
+        return sourceDeclarations.get(source.toAbsolutePath().normalize());
+    }
+
     void readSourceFile(Path source) throws IOException, ToolException {
         var fileName = source.getFileName().toString();
-        var structure = SourceModel.parse(Files.readAllBytes(source)).structure(fileName, Visibility.ALL, false);
+        var parsed = sourceDeclaration(source);
+        var structure = parsed != null ? parsed.structure()
+                : SourceModel.parse(Files.readAllBytes(source)).structure(fileName, Visibility.ALL, false);
         readSourceUnit(DeclarationSearch.sourceUnitName(structure, fileName));
     }
 

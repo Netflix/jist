@@ -71,9 +71,10 @@ class RelationshipQueryTest {
         var result = run("--subtypes", "example.Root");
         assertSuccess(result);
         assertEquals(
-                List.of("class example.Base", "interface example.Branch", "class example.Inherited", "class example.Leaf", "class example.Other"),
+                List.of("class example.Base", "class example.Inherited", "class example.Leaf", "class example.Other", "interface example.Branch"),
                 result.output()
                       .lines()
+                      .sorted()
                       .toList());
     }
 
@@ -81,9 +82,10 @@ class RelationshipQueryTest {
     void findsOnlyExplicitParentsWithDirect() {
         var result = run("--subtypes", "example.Root", "--direct");
         assertSuccess(result);
-        assertEquals(List.of("interface example.Branch", "class example.Other"),
+        assertEquals(List.of("class example.Other", "interface example.Branch"),
                 result.output()
                       .lines()
+                      .sorted()
                       .toList());
     }
 
@@ -168,6 +170,26 @@ class RelationshipQueryTest {
     }
 
     @Test
+    void hierarchyDeclarationsRetainArchiveEntryOrder(@TempDir Path directory) throws Exception {
+        var archive = directory.resolve("ordered.jar");
+        var names = List.of("Leaf", "Other", "Branch", "Base", "Inherited", "Root");
+        try (var output = new JarOutputStream(Files.newOutputStream(archive))) {
+            for (var name : names) {
+                var resource = "example/" + name + ".class";
+                output.putNextEntry(new JarEntry(resource));
+                output.write(Files.readAllBytes(CLASSES.resolve(resource)));
+                output.closeEntry();
+            }
+        }
+
+        var result = run("--class-path", archive.toString(), "--exclude-system-modules", "--subtypes", "example.Root");
+
+        assertSuccess(result);
+        assertEquals(List.of("class example.Leaf", "class example.Other", "interface example.Branch",
+                "class example.Base", "class example.Inherited"), result.output().lines().toList());
+    }
+
+    @Test
     void excludedPathsRemainAvailableForHierarchyResolution(@TempDir Path directory) throws Exception {
         var parents = directory.resolve("parents");
         var candidates = directory.resolve("candidates");
@@ -190,13 +212,37 @@ class RelationshipQueryTest {
             types.addAll(List.of("--subtypes", "example.Root"));
             var result = run(types.toArray(String[]::new));
             assertSuccess(result);
-            assertEquals("class example.Leaf\nclass example.Other\n", result.output());
+            assertEquals(List.of("class example.Leaf", "class example.Other"), result.output().lines().sorted().toList());
             var methods = new ArrayList<>(options);
             methods.addAll(List.of("--overrides", "example.Root.run"));
             var overrides = run(methods.toArray(String[]::new));
             assertSuccess(overrides);
             assertEquals(4, overrides.output().lines().count(), overrides.output());
         }
+    }
+
+    @Test
+    void excludedSystemAncestorsResolveThroughUnexportedPackages(@TempDir Path directory) throws Exception {
+        var source = directory.resolve("Item.java");
+        var classes = directory.resolve("classes");
+        Files.writeString(source, """
+                package example;
+                public abstract class Item extends jdk.internal.ref.PhantomCleanable<Object> {
+                    public Item(Object value) { super(value, java.lang.ref.Cleaner.create()); }
+                }
+                """);
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null,
+                    List.of("-d", classes.toString(), "--add-exports", "java.base/jdk.internal.ref=ALL-UNNAMED"),
+                    null, manager.getJavaFileObjects(source)).call());
+        }
+
+        var result = run("--class-path", classes.toString(), "--exclude-system-modules",
+                "--subtypes", "java.lang.ref.PhantomReference");
+
+        assertSuccess(result);
+        assertEquals("class example.Item\n", result.output());
     }
 
     @Test
@@ -544,6 +590,43 @@ class RelationshipQueryTest {
     }
 
     @Test
+    void hierarchyUsesTheFirstClassPathDefinition(@TempDir Path directory) throws Exception {
+        var source = directory.resolve("Base.java");
+        var classes = directory.resolve("classes");
+        Files.writeString(source, """
+                package example;
+                public abstract class Base extends Unrelated {
+                    public abstract void run(String value);
+                    public void run(int value) {}
+                }
+                """);
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null,
+                    List.of("-d", classes.toString(), "--class-path", CLASSES.toString()), null,
+                    manager.getJavaFileObjects(source)).call());
+        }
+        var archive = directory.resolve("replacement.jar");
+        writeJar(archive, classes);
+        for (var first : List.of(archive, CLASSES)) {
+            var second = first.equals(archive) ? CLASSES : archive;
+            var path = first + File.pathSeparator + second;
+            var original = run("--class-path", path, "--exclude-system-modules", "--subtypes", "example.Root");
+            assertSuccess(original);
+            assertEquals(first.equals(archive)
+                            ? List.of("class example.Other", "interface example.Branch")
+                            : List.of("class example.Base", "class example.Inherited", "class example.Leaf",
+                                    "class example.Other", "interface example.Branch"),
+                    original.output().lines().sorted().toList());
+            var replacement = run("--class-path", path, "--exclude-system-modules", "--subtypes", "example.Unrelated");
+            assertSuccess(replacement);
+            assertEquals(first.equals(archive)
+                            ? List.of("class example.Base", "class example.Inherited", "class example.Leaf") : List.of(),
+                    replacement.output().lines().sorted().toList());
+        }
+    }
+
+    @Test
     void repeatedClassPathEntriesDoNotDuplicateDeclarations() {
         var result = run("--class-path", CLASSES + File.pathSeparator + CLASSES, "--overrides", "example.Root.run", "--overrides",
                 "example.Base.run");
@@ -747,6 +830,51 @@ class RelationshipQueryTest {
         var parents = run("--source-path", source.toString(), "--supertypes", "example.Secondary", "--visibility", "all");
         assertSuccess(parents);
         assertTrue(parents.output().contains("class example.Base\n"), parents.output());
+    }
+
+    @Test
+    void sourceRelationshipsPreserveParsedDeclarationsAndLazyBodyAttribution(@TempDir Path source) throws Exception {
+        var directory = Files.createDirectories(source.resolve("example"));
+        Files.writeString(directory.resolve("Holder.java"), """
+                package example;
+                public class Holder {
+                    public static class Nested extends Base {
+                        /** Runs the value. */
+                        public void run(String value) { missingBodyOnly(); }
+                    }
+                }
+                record Secondary(int value) implements Root<String> {
+                    public void run(String value) {}
+                    public void run(int value) {}
+                }
+                """);
+
+        var types = run("--source-path", source.toString(), "--subtypes", "example.Root", "--visibility", "all");
+        assertSuccess(types);
+        assertTrue(types.output().contains("class example.Holder.Nested\n"), types.output());
+        assertTrue(types.output().contains("record example.Secondary\n"), types.output());
+        var methods = render("--source-path", source.toString(), "--overrides", "example.Root.run",
+                "--visibility", "all", "--source", "definition");
+        assertEquals(0, methods.code(), methods.error());
+        assertTrue(methods.output().contains("Holder.java:4):         /** Runs the value. */"), methods.output());
+        assertTrue(methods.output().contains("Holder.java:5):         public void run(String value) { missingBodyOnly(); }"), methods.output());
+        assertTrue(methods.output().contains("Holder.java:9):     public void run(String value) {}"), methods.output());
+        assertTrue(methods.output().contains("Holder.java:10):     public void run(int value) {}"), methods.output());
+    }
+
+    @Test
+    void sourceRelationshipsUseTheFirstSourcePathDefinition(@TempDir Path directory) throws Exception {
+        var first = Files.createDirectories(directory.resolve("first/example"));
+        var second = Files.createDirectories(directory.resolve("second/example"));
+        var fileName = "NewLeaf.java";
+        Files.writeString(first.resolve(fileName), "package example; public abstract class NewLeaf extends Base {}");
+        Files.writeString(second.resolve(fileName), "package example; public class NewLeaf extends Unrelated {}");
+
+        var result = run("--source-path", first.getParent() + File.pathSeparator + second.getParent(),
+                "--subtypes", "example.Root");
+
+        assertSuccess(result);
+        assertEquals(1, result.output().lines().filter(line -> line.equals("class example.NewLeaf")).count(), result.output());
     }
 
     @Test

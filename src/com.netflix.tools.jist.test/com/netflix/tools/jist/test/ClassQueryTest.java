@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.jar.Attributes.Name;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -542,18 +543,23 @@ class ClassQueryTest {
                 expected.add("ordered." + name + "(" + name + ".java:4):     public void work() {}");
             }
         }
+        List<String> directoryOrder;
+        try (var files = Files.find(classes, Integer.MAX_VALUE, (_, attributes) -> attributes.isRegularFile())) {
+            directoryOrder = files.map(file -> file.getFileName().toString().replace(".class", ""))
+                    .map(name -> "ordered." + name + "(" + name + ".java:4):     public void work() {}")
+                    .toList();
+        }
         for (var input : List.of(archive, classes.getParent())) {
             var result = run("--system", "none", "--class-path", input.toString(),
                     "--source-path", sourceArchive.toString(), "--source", "signature", "--kind", "method", "work");
             assertEquals(0, result.exitCode(), result.error());
             assertEquals("", result.error());
-            assertEquals(input.equals(archive) ? expected : expected.stream().sorted().toList(),
-                    result.output().lines().toList());
+            assertEquals(input.equals(archive) ? expected : directoryOrder, result.output().lines().toList());
         }
     }
 
     @Test
-    void directoryDeclarationsPreserveMetadataAndTreeOrder(@TempDir Path directory) throws IOException {
+    void directoryDeclarationsEmitPackageMetadataBeforeTypes(@TempDir Path directory) throws IOException {
         var classes = Files.createDirectories(directory.resolve("classes"));
         var packageDirectory = Files.createDirectories(classes.resolve("modular/api"));
         for (var name : List.of("modular.api.a.Nested", "modular.api.Zulu", "modular.api.Alpha")) {
@@ -568,12 +574,49 @@ class ClassQueryTest {
                 "--kind", "package", "--kind", "type");
 
         assertEquals(0, listed.exitCode(), listed.error());
-        assertEquals(List.of("package modular.api", "class modular.api.Alpha", "class modular.api.Zulu",
-                "package modular.api.a", "class modular.api.a.Nested"), listed.output().lines().toList());
+        var listedLines = listed.output().lines().toList();
+        assertEquals(5, listedLines.size());
+        assertEquals("package modular.api", listedLines.getFirst());
+        assertEquals(Set.of("package modular.api", "class modular.api.Alpha", "class modular.api.Zulu",
+                "package modular.api.a", "class modular.api.a.Nested"), Set.copyOf(listedLines));
+        assertTrue(listedLines.indexOf("package modular.api.a") < listedLines.indexOf("class modular.api.a.Nested"));
         assertEquals(0, described.exitCode(), described.error());
-        assertEquals(List.of("modular.api: @Deprecated package modular.api;", "modular.api.Alpha: public class Alpha {",
+        var describedLines = described.output().lines().toList();
+        assertEquals(5, describedLines.size());
+        assertEquals("modular.api: @Deprecated package modular.api;", describedLines.getFirst());
+        assertEquals(Set.of("modular.api: @Deprecated package modular.api;", "modular.api.Alpha: public class Alpha {",
                 "modular.api.Zulu: public class Zulu {", "modular.api.a: package modular.api.a;",
-                "modular.api.a.Nested: public class Nested {"), described.output().lines().toList());
+                "modular.api.a.Nested: public class Nested {"), Set.copyOf(describedLines));
+    }
+
+    @Test
+    void directorySourceDeclarationsEmitMetadataOnceBeforeTypes() {
+        var result = run("--system", "none", "--source-path", ROOT.resolve("module-src/sample.module").toString(),
+                "-l", "--kind", "module", "--kind", "package", "--kind", "type");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals("", result.error());
+        var lines = result.output().lines().toList();
+        assertEquals("module sample.module", lines.getFirst());
+        assertEquals(1, lines.stream().filter("module sample.module"::equals).count());
+        assertEquals(1, lines.stream().filter("package modular.api"::equals).count());
+        assertTrue(lines.indexOf("package modular.api") < lines.indexOf("class modular.api.ModuleType"), result.output());
+    }
+
+    @Test
+    void directoryDeclarationsReadSymbolicLinkFiles(@TempDir Path directory) throws IOException {
+        var classes = Files.createDirectories(directory.resolve("classes"));
+        Files.createDirectories(classes.resolve("com/example"));
+        Files.createSymbolicLink(classes.resolve("com/example/Example.class"), CLASS.toAbsolutePath());
+        var linkedRoot = Files.createSymbolicLink(directory.resolve("linked-classes"), classes);
+
+        for (var input : List.of(classes, linkedRoot)) {
+            var result = run("--system", "none", "--class-path", input.toString(), "--source", "none", "-l", "--kind", "type");
+
+            assertEquals(0, result.exitCode(), result.error());
+            assertEquals("", result.error());
+            assertEquals("class com.example.Example\n", result.output());
+        }
     }
 
     @Test

@@ -71,9 +71,10 @@ class RelationshipQueryTest {
         var result = run("--subtypes", "example.Root");
         assertSuccess(result);
         assertEquals(
-                List.of("class example.Base", "interface example.Branch", "class example.Inherited", "class example.Leaf", "class example.Other"),
+                List.of("class example.Base", "class example.Inherited", "class example.Leaf", "class example.Other", "interface example.Branch"),
                 result.output()
                       .lines()
+                      .sorted()
                       .toList());
     }
 
@@ -81,9 +82,10 @@ class RelationshipQueryTest {
     void findsOnlyExplicitParentsWithDirect() {
         var result = run("--subtypes", "example.Root", "--direct");
         assertSuccess(result);
-        assertEquals(List.of("interface example.Branch", "class example.Other"),
+        assertEquals(List.of("class example.Other", "interface example.Branch"),
                 result.output()
                       .lines()
+                      .sorted()
                       .toList());
     }
 
@@ -190,7 +192,7 @@ class RelationshipQueryTest {
             types.addAll(List.of("--subtypes", "example.Root"));
             var result = run(types.toArray(String[]::new));
             assertSuccess(result);
-            assertEquals("class example.Leaf\nclass example.Other\n", result.output());
+            assertEquals(List.of("class example.Leaf", "class example.Other"), result.output().lines().sorted().toList());
             var methods = new ArrayList<>(options);
             methods.addAll(List.of("--overrides", "example.Root.run"));
             var overrides = run(methods.toArray(String[]::new));

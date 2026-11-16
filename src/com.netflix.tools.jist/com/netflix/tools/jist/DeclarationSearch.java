@@ -19,7 +19,6 @@ import module java.base;
 import java.lang.classfile.Attributes;
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.ClassModel;
-import java.nio.file.LinkOption;
 import java.util.Map.Entry;
 import javax.lang.model.element.Modifier;
 import javax.tools.ToolProvider;
@@ -311,36 +310,51 @@ final class DeclarationSearch {
         }
     }
 
-    private record DeclarationEntry(Path path, String name, int order) {
-        boolean directory() {
-            return order == 3;
+    private static final class MetadataVisitException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        MetadataVisitException(Exception cause) {
+            super(cause);
         }
     }
 
-    private static void walkFilesInDeclarationOrder(Path directory, PathConsumer consumer) throws IOException, ToolException {
-        List<DeclarationEntry> entries;
-        try (var children = Files.list(directory)) {
-            entries = children.map(DeclarationSearch::declarationEntry)
-                    .sorted(Comparator.comparingInt(DeclarationEntry::order).thenComparing(DeclarationEntry::name))
-                    .toList();
-        }
-        for (var entry : entries) {
-            if (entry.directory()) {
-                walkFilesInDeclarationOrder(entry.path(), consumer);
-            } else if (Files.isRegularFile(entry.path())) {
-                consumer.accept(entry.path());
+    private static void walkDeclarationFiles(Path directory, String extension, PathConsumer consumer)
+            throws IOException, ToolException {
+        var root = Files.isSymbolicLink(directory) ? directory.toRealPath() : directory;
+        PathConsumer visit = root.equals(directory) ? consumer
+                : file -> consumer.accept(directory.resolve(root.relativize(file)));
+        var metadata = List.of("module-info" + extension, "package-info" + extension);
+        try (var files = Files.find(root, Integer.MAX_VALUE, (file, attributes) -> {
+            if (attributes.isDirectory()) {
+                try {
+                    for (var name : metadata) {
+                        var descriptor = file.resolve(name);
+                        if (Files.isRegularFile(descriptor)) {
+                            visit.accept(descriptor);
+                        }
+                    }
+                } catch (IOException | ToolException failure) {
+                    // Files.find's predicate cannot propagate the consumer's checked failures.
+                    throw new MetadataVisitException(failure);
+                }
+                return false;
+            }
+            return file.toString().endsWith(extension)
+                    && !metadata.contains(file.getFileName().toString())
+                    && (attributes.isRegularFile() || attributes.isSymbolicLink() && Files.isRegularFile(file));
+        })) {
+            try {
+                var iterator = files.iterator();
+                while (iterator.hasNext()) {
+                    visit.accept(iterator.next());
+                }
+            } catch (MetadataVisitException failure) {
+                if (failure.getCause() instanceof IOException cause) {
+                    throw cause;
+                }
+                throw (ToolException) failure.getCause();
             }
         }
-    }
-
-    private static DeclarationEntry declarationEntry(Path path) {
-        var name = path.getFileName().toString();
-        int order = Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) ? 3 : switch (name) {
-            case "module-info.class", "module-info.java" -> 0;
-            case "package-info.class", "package-info.java" -> 1;
-            default -> 2;
-        };
-        return new DeclarationEntry(path, name, order);
     }
 
     void listSourceContexts(Options opts, PrintWriter out) throws IOException, ToolException {
@@ -443,10 +457,7 @@ final class DeclarationSearch {
         if (Files.isDirectory(entry)) {
             try (var classes = new SourceClassFiles(opts, out, visibility, sources, emittedSources, emittedPackages,
                     parsedSources, executor)) {
-                walkFilesInDeclarationOrder(entry, classFile -> {
-                    if (!classFile.toString().endsWith(CLASS_EXT)) {
-                        return;
-                    }
+                walkDeclarationFiles(entry, CLASS_EXT, classFile -> {
                     var resourceName = entry.relativize(classFile)
                                             .toString()
                                             .replace(File.separatorChar, '/');
@@ -574,7 +585,7 @@ final class DeclarationSearch {
                     }
                     try (var classes = new SourceClassFiles(opts, out, visibility, sources, emittedSources, emittedPackages,
                             parsedSources, executor)) {
-                        walkFilesInDeclarationOrder(module, classFile -> {
+                        walkDeclarationFiles(module, CLASS_EXT, classFile -> {
                             var resourceName = module.relativize(classFile).toString();
                             if (!environment.includesSystemResource(module.getFileName().toString(), resourceName)
                                     || !visibleClassResource(resourceName, module.getFileName().toString(), visiblePackages, opts)
@@ -855,10 +866,10 @@ final class DeclarationSearch {
             }
             var normalizedRoot = root.toAbsolutePath().normalize();
             var visiblePackages = ordinaryRoots.contains(normalizedRoot) ? null : modulePackages.get(normalizedRoot);
-            walkFilesInDeclarationOrder(
-                    root,
+            walkDeclarationFiles(
+                    root, JAVA_EXT,
                     sourceFile -> {
-                        if (!sourceFile.toString().endsWith(JAVA_EXT) || !environment.includesSource(root, sourceFile)) {
+                        if (!environment.includesSource(root, sourceFile)) {
                             return;
                         }
                         var origin = unitLocation(sourceFile);
@@ -1059,8 +1070,8 @@ final class DeclarationSearch {
                         continue;
                     }
                     try (var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
-                        walkFilesInDeclarationOrder(
-                                module,
+                        walkDeclarationFiles(
+                                module, CLASS_EXT,
                             file -> {
                                 var resourceName = module.relativize(file).toString();
                                 var className = listedClassName(resourceName);
@@ -1100,8 +1111,8 @@ final class DeclarationSearch {
             }
             if (Files.isDirectory(entry)) {
                 try (var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
-                    walkFilesInDeclarationOrder(
-                            entry,
+                    walkDeclarationFiles(
+                            entry, CLASS_EXT,
                         file -> {
                             var resourceName = entry.relativize(file)
                                                     .toString()
@@ -1167,8 +1178,8 @@ final class DeclarationSearch {
             }
             if (Files.isDirectory(entry)) {
                 try (var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
-                    walkFilesInDeclarationOrder(
-                            entry,
+                    walkDeclarationFiles(
+                            entry, CLASS_EXT,
                         file -> {
                             var resourceName = entry.relativize(file)
                                                     .toString()
@@ -1211,9 +1222,9 @@ final class DeclarationSearch {
                 if (!environment.searches(sourceRoot) || !Files.isDirectory(sourceRoot)) {
                     continue;
                 }
-                walkFilesInDeclarationOrder(sourceRoot,
+                walkDeclarationFiles(sourceRoot, JAVA_EXT,
                         sourceFile -> {
-                            if (!sourceFile.toString().endsWith(JAVA_EXT) || !environment.includesSource(sourceRoot, sourceFile)) {
+                            if (!environment.includesSource(sourceRoot, sourceFile)) {
                                 return;
                             }
                             var task = (JavacTask) compiler.getTask(null, fileManager, null, List.of("-proc:none"), null,

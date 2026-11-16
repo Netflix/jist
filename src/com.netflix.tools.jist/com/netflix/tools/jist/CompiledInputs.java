@@ -163,17 +163,24 @@ final class CompiledInputs {
 
     static void scan(Options options, SearchEnvironment environment, Reader reader, Consumer consumer)
             throws IOException, ToolException {
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            scan(options, environment, reader, consumer, executor);
+        }
+    }
+
+    private static void scan(Options options, SearchEnvironment environment, Reader reader, Consumer consumer,
+                             ExecutorService executor) throws IOException, ToolException {
         if (!options.excludeApplicationClasses()) {
             if (readsUnnamedModule(options)) {
                 for (var path : environment.classPathEntries()) {
                     if (environment.searches(path)) {
-                        scanEntry(path, reader, consumer, _ -> true);
+                        scanEntry(path, reader, consumer, _ -> true, executor);
                     }
                 }
             }
             for (var module : environment.moduleInputs()) {
                 if (environment.searches(module)) {
-                    scanEntry(module.location(), reader, consumer, module::includesResource);
+                    scanEntry(module.location(), reader, consumer, module::includesResource, executor);
                 }
             }
         }
@@ -200,7 +207,8 @@ final class CompiledInputs {
         }
         try {
             for (var module : modules) {
-                scanEntry(system.getPath("/modules", module), reader, consumer, resource -> environment.includesSystemResource(module, resource));
+                scanEntry(system.getPath("/modules", module), reader, consumer,
+                        resource -> environment.includesSystemResource(module, resource), executor);
             }
         } finally {
             if (close) {
@@ -239,44 +247,21 @@ final class CompiledInputs {
         return bytes;
     }
 
-    static void scanEntry(Path path, Reader reader, Consumer consumer, Filter filter) throws IOException, ToolException {
-        if (Files.isDirectory(path)) {
-            try (var files = Files.walk(path)) {
-                var iterator = files.filter(Files::isRegularFile)
-                        .filter(file -> file.toString().endsWith(".class"))
-                        .iterator();
-                while (iterator.hasNext()) {
-                    var file = iterator.next();
-                    if (!filter.test(path.relativize(file).toString().replace(File.separatorChar, '/'))) {
-                        continue;
-                    }
-                    try (var input = Files.newInputStream(file)) {
-                        var bytes = reader.read(input, Files.size(file));
-                        if (bytes != null) {
-                            consumer.accept(bytes, () -> unitLocation(file));
-                        }
-                    }
+    private record ReadClass(byte[] bytes, ClassInput input) {}
+
+    private static void scanEntry(Path path, Reader reader, Consumer consumer, Filter filter, ExecutorService executor)
+            throws IOException, ToolException {
+        try (var root = Root.open(path);
+             var reads = new OrderedReads<ReadClass>(executor, value -> consumer.accept(value.bytes(), value.input()))) {
+            root.forEach(false, input -> {
+                if (filter.test(input.resource())) {
+                    reads.submit(() -> {
+                        var bytes = input.read(reader);
+                        return bytes == null ? null : new ReadClass(bytes, input);
+                    });
                 }
-            }
-        } else if (Files.isRegularFile(path)) {
-            try (var jar = ClassPaths.openArchive(path, true)) {
-                var origin = "jar:" + path.toAbsolutePath().normalize().toUri() + "!/";
-                var iterator = jar.versionedStream()
-                        .filter(entry -> !entry.isDirectory() && entry.getName().endsWith(".class"))
-                        .iterator();
-                while (iterator.hasNext()) {
-                    var entry = iterator.next();
-                    if (!filter.test(entry.getName())) {
-                        continue;
-                    }
-                    try (var input = jar.getInputStream(entry)) {
-                        var bytes = reader.read(input, entry.getSize());
-                        if (bytes != null) {
-                            consumer.accept(bytes, () -> origin + entry.getRealName());
-                        }
-                    }
-                }
-            }
+            });
+            reads.finish();
         }
     }
 

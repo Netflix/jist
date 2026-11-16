@@ -122,8 +122,10 @@ final class CallSearch implements Closeable {
             for (var key : outgoing) {
                 needles.add(key.substring(0, key.indexOf('#')).replace('.', '/'));
             }
-            CompiledInputs.scan(options, environment, CompiledInputs::readAllBytes,
-                    (bytes, location) -> compiled(bytes, location, needles, sources, out));
+            CompiledInputs.scan(options, environment, (input, size) -> {
+                var bytes = CompiledInputs.readAllBytes(input, size);
+                return mentionsTarget(bytes, needles) ? bytes : null;
+            }, (bytes, location) -> compiled(bytes, location, sources, out));
             var candidates = new LinkedHashMap<URI, SourceCandidate>();
             for (var root : sources.explicitPaths()) {
                 if (!environment.searches(root)) continue;
@@ -280,17 +282,18 @@ final class CallSearch implements Closeable {
 
     private record SourceCandidate(Path file, byte[] bytes) {}
 
-    private void compiled(byte[] bytes, Supplier<String> origin, Set<String> needles, SourceLookup sources, PrintWriter out)
-            throws IOException, ToolException {
+    private static boolean mentionsTarget(byte[] bytes, Set<String> needles) {
         var constants = new String(bytes, StandardCharsets.ISO_8859_1);
-        boolean candidate = false;
         for (var needle : needles) {
             if (constants.contains(needle)) {
-                candidate = true;
-                break;
+                return true;
             }
         }
-        if (!candidate) return;
+        return false;
+    }
+
+    private void compiled(byte[] bytes, Supplier<String> origin, SourceLookup sources, PrintWriter out)
+            throws IOException, ToolException {
         var model = ClassFile.of().parse(bytes);
         var internal = model.thisClass().asInternalName();
         var name = SearchEnvironment.listedClassName(internal + ".class");

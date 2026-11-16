@@ -124,11 +124,12 @@ final class UsageSearch {
     private void scanCompiledUsages(Options opts, UsageTarget target, UsageOutput out) throws IOException, ToolException {
         try (var sources = environment.sources()) {
             sources.prepareOrdinarySources();
-            var classReader = new UsageClassReader(target);
             out.sourceAttributor(location -> attributeAttachedSourceUnit(location, opts, target, out));
             try {
-                CompiledInputs.scan(opts, environment, (input, _) -> classReader.read(input),
-                        (bytes, location) -> scanCompiledUsageClass(bytes, location.get(), target, sources, out));
+                CompiledInputs.scan(opts, environment, (input, size) -> {
+                    var bytes = CompiledInputs.readAllBytes(input, size);
+                    return target.mayOccurIn(bytes, bytes.length) ? bytes : null;
+                }, (bytes, location) -> scanCompiledUsageClass(bytes, location.get(), target, sources, out));
             } finally {
                 out.sourceAttributor(null);
             }
@@ -262,42 +263,6 @@ final class UsageSearch {
             }
         }
         return new UsageLocation(unitName, sourceFileName, classLocation, null);
-    }
-
-    private static final class UsageClassReader {
-        private final UsageTarget target;
-        private byte[] buffer = new byte[16 * 1024];
-
-        UsageClassReader(UsageTarget target) {
-            this.target = target;
-        }
-
-        byte[] read(Path path) throws IOException {
-            try (var input = Files.newInputStream(path)) {
-                return read(input);
-            }
-        }
-
-        byte[] read(InputStream input) throws IOException {
-            int length = 0;
-            while (true) {
-                int count = input.read(buffer, length, buffer.length - length);
-                if (count < 0) {
-                    break;
-                }
-                length += count;
-                if (length < buffer.length) {
-                    continue;
-                }
-                int next = input.read();
-                if (next < 0) {
-                    break;
-                }
-                buffer = Arrays.copyOf(buffer, buffer.length * 2);
-                buffer[length++] = (byte) next;
-            }
-            return target.mayOccurIn(buffer, length) ? Arrays.copyOf(buffer, length) : null;
-        }
     }
 
     private static boolean matchesCompiledInstruction(UsageTarget target, ClassModel model, Instruction instruction) {

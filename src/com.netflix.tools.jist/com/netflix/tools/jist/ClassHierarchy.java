@@ -177,28 +177,19 @@ final class ClassHierarchy implements Closeable {
     }
 
     private void scan(List<Input> inputs) throws IOException, ToolException {
-        var permits = new Semaphore(Math.max(2, Runtime.getRuntime().availableProcessors()));
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            var tasks = new ArrayList<Future<?>>(inputs.size());
             for (int index = 0; index < inputs.size(); index++) {
                 int inputOrder = index;
                 var input = inputs.get(index);
-                tasks.add(executor.submit(() -> {
-                    permits.acquire();
-                    try {
-                        CompiledInputs.scanEntry(
-                                input.path(),
-                                CompiledInputs::readAllBytes,
-                                (bytes, _) -> add(inputOrder, CLASS_FILE.parse(bytes)),
-                                input.filter());
-                    } finally {
-                        permits.release();
-                    }
-                    return null;
-                }));
-            }
-            for (var task : tasks) {
-                await(task);
+                try (var root = CompiledInputs.Root.open(input.path());
+                     var reads = new CompiledInputs.OrderedReads<ClassModel>(executor, model -> add(inputOrder, model))) {
+                    root.forEach(false, resource -> {
+                        if (input.filter().test(resource.resource())) {
+                            reads.submit(() -> CLASS_FILE.parse(resource.read()));
+                        }
+                    });
+                    reads.finish();
+                }
             }
         }
     }
@@ -334,32 +325,6 @@ final class ClassHierarchy implements Closeable {
         model.superclass().ifPresent(parent -> parents.add(displayName(parent.asInternalName())));
         model.interfaces().forEach(parent -> parents.add(displayName(parent.asInternalName())));
         return List.copyOf(parents);
-    }
-
-    private static void await(Future<?> task) throws IOException, ToolException {
-        try {
-            task.get();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            var interrupted = new InterruptedIOException("Interrupted while reading ClassFiles");
-            interrupted.initCause(e);
-            throw interrupted;
-        } catch (ExecutionException e) {
-            var cause = e.getCause();
-            if (cause instanceof IOException failure) {
-                throw failure;
-            }
-            if (cause instanceof ToolException failure) {
-                throw failure;
-            }
-            if (cause instanceof RuntimeException failure) {
-                throw failure;
-            }
-            if (cause instanceof Error failure) {
-                throw failure;
-            }
-            throw new IOException("Failed to read ClassFile hierarchy", cause);
-        }
     }
 
     private static String displayName(String internalName) {

@@ -268,14 +268,15 @@ final class DeclarationSearch {
             Map<String, EnumeratedSource> parsedSources,
             ExecutorService executor)
             throws IOException, ToolException {
-        if (!environment.searches(entry)) {
+        if (!environment.searches(entry)
+                || relationships != null && relationships.compiledResources(entry).isEmpty()) {
             return;
         }
         try (var root = CompiledInputs.Root.open(entry);
              var classes = new SourceClassFiles(opts, out, visibility, sources, emittedSources, emittedPackages,
                      parsedSources, executor)) {
             var scheduledPackages = new HashSet<String>();
-            root.forEach(true, input -> {
+            forEachCompiledInput(entry, root, input -> {
                 var resource = input.resource();
                 if (!filter.test(resource)
                         || !visibleClassResource(resource, moduleName, visiblePackages, opts)
@@ -298,6 +299,20 @@ final class DeclarationSearch {
                 classes.submit(input);
             });
             classes.finish();
+        }
+    }
+
+    private void forEachCompiledInput(Path path, CompiledInputs.Root root, CompiledInputs.InputConsumer consumer)
+            throws IOException, ToolException {
+        if (relationships == null) {
+            root.forEach(true, consumer);
+        } else {
+            for (var resource : relationships.compiledResources(path)) {
+                var input = root.find(resource);
+                if (input != null) {
+                    consumer.accept(input);
+                }
+            }
         }
     }
 
@@ -371,13 +386,14 @@ final class DeclarationSearch {
             try (var moduleDirectories = Files.list(modules)) {
                 for (var module : moduleDirectories.sorted(Comparator.comparing(path -> path.getFileName().toString())).toList()) {
                     var visiblePackages = systemPackages.get(module.getFileName().toString());
-                    if (visiblePackages == null) {
+                    if (visiblePackages == null
+                            || relationships != null && relationships.compiledResources(module).isEmpty()) {
                         continue;
                     }
                     try (var root = CompiledInputs.Root.open(module);
                          var classes = new SourceClassFiles(opts, out, visibility, sources, emittedSources, emittedPackages,
                                  parsedSources, executor)) {
-                        root.forEach(true, input -> {
+                        forEachCompiledInput(module, root, input -> {
                             var resourceName = input.resource();
                             if (!environment.includesSystemResource(module.getFileName().toString(), resourceName)
                                     || !visibleClassResource(resourceName, module.getFileName().toString(), visiblePackages, opts)

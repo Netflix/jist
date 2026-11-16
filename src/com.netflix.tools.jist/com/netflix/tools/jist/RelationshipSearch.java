@@ -38,6 +38,7 @@ final class RelationshipSearch implements Closeable {
     private Set<String> compiledSubtypes = Set.of();
     private Set<String> compiledOverrideOwners = Set.of();
     private Set<String> sourceAffected = Set.of();
+    private Map<String, List<String>> compiledResources = Map.of();
 
     private RelationshipSearch(Options options, SearchEnvironment environment) {
         this.options = options;
@@ -106,6 +107,7 @@ final class RelationshipSearch implements Closeable {
                                 .collect(Collectors.toUnmodifiableSet());
                         search.compiledOverrideOwners = hierarchy.overrideOwners(owners);
                     }
+                    search.compiledResources = hierarchy.compiledResources(search::mayMatchCompiledClass);
                 }
             }
             if (search.analysis != null) {
@@ -128,6 +130,10 @@ final class RelationshipSearch implements Closeable {
 
     void readSourceUnit(String name) throws IOException, ToolException {
         analysis().readSourceUnit(name);
+    }
+
+    List<String> compiledResources(Path root) {
+        return compiledResources.getOrDefault(SearchEnvironment.unitLocation(root), List.of());
     }
 
     boolean mayMatchCompiledClass(String name) {

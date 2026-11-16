@@ -29,6 +29,7 @@ final class ClassHierarchy implements Closeable {
 
     private final Map<String, List<String>> types = new HashMap<>();
     private final Map<String, List<String>> resolvedParents = new HashMap<>();
+    private final Map<String, List<PreparedClass>> compiledInputs = new HashMap<>();
     private final SearchEnvironment environment;
     private final SourceLookup sources;
     private final Set<String> sourceTypes = new HashSet<>();
@@ -175,18 +176,38 @@ final class ClassHierarchy implements Closeable {
         return Set.copyOf(matches);
     }
 
+    Map<String, List<String>> compiledResources(Predicate<String> matches) {
+        var selected = new HashMap<String, List<String>>();
+        compiledInputs.forEach((root, classes) -> {
+            var resources = classes.stream()
+                    .filter(candidate -> matches.test(candidate.name()))
+                    .map(PreparedClass::resource)
+                    .toList();
+            if (!resources.isEmpty()) {
+                selected.put(root, resources);
+            }
+        });
+        return Map.copyOf(selected);
+    }
+
     private void scan(List<Input> inputs) throws IOException, ToolException {
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             for (var input : inputs) {
+                var classes = new ArrayList<PreparedClass>();
                 try (var root = CompiledInputs.Root.open(input.path());
-                     var reads = new CompiledInputs.OrderedReads<PreparedClass>(executor, this::add)) {
+                     var reads = new CompiledInputs.OrderedReads<PreparedClass>(executor, prepared -> {
+                         add(prepared);
+                         classes.add(prepared);
+                     })) {
                     root.forEach(false, resource -> {
                         if (input.filter().test(resource.resource())) {
-                            reads.submit(() -> prepare(CLASS_FILE.parse(resource.read())));
+                            reads.submit(() -> prepare(CLASS_FILE.parse(resource.read()), resource.resource()));
                         }
                     });
                     reads.finish();
                 }
+                // The selected JRT filesystem may be reopened before declaration output.
+                compiledInputs.put(SearchEnvironment.unitLocation(input.path()), classes);
             }
         }
     }
@@ -212,13 +233,13 @@ final class ClassHierarchy implements Closeable {
         return result;
     }
 
-    private PreparedClass prepare(ClassModel model) {
+    private PreparedClass prepare(ClassModel model, String resource) {
         if (model.isModuleInfo()) {
             return null;
         }
         var internalName = model.thisClass().asInternalName();
         var source = sources.mayHaveOrdinarySource(internalName) ? sources.ordinarySource(model) : null;
-        return new PreparedClass(displayName(internalName), parents(model), source);
+        return new PreparedClass(displayName(internalName), parents(model), source, resource);
     }
 
     private void add(PreparedClass prepared) {
@@ -244,7 +265,7 @@ final class ClassHierarchy implements Closeable {
         }
         List<String> parents;
         if (model != null) {
-            var prepared = prepare(model);
+            var prepared = prepare(model, null);
             parents = prepared == null ? List.of() : prepared.parents();
             if (prepared != null) {
                 rememberSource(prepared);
@@ -332,5 +353,5 @@ final class ClassHierarchy implements Closeable {
 
     private record Input(Path path, Filter filter) {}
 
-    private record PreparedClass(String name, List<String> parents, Path source) {}
+    private record PreparedClass(String name, List<String> parents, Path source, String resource) {}
 }

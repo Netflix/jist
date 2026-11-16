@@ -170,6 +170,26 @@ class RelationshipQueryTest {
     }
 
     @Test
+    void hierarchyDeclarationsRetainArchiveEntryOrder(@TempDir Path directory) throws Exception {
+        var archive = directory.resolve("ordered.jar");
+        var names = List.of("Leaf", "Other", "Branch", "Base", "Inherited", "Root");
+        try (var output = new JarOutputStream(Files.newOutputStream(archive))) {
+            for (var name : names) {
+                var resource = "example/" + name + ".class";
+                output.putNextEntry(new JarEntry(resource));
+                output.write(Files.readAllBytes(CLASSES.resolve(resource)));
+                output.closeEntry();
+            }
+        }
+
+        var result = run("--class-path", archive.toString(), "--exclude-system-modules", "--subtypes", "example.Root");
+
+        assertSuccess(result);
+        assertEquals(List.of("class example.Leaf", "class example.Other", "interface example.Branch",
+                "class example.Base", "class example.Inherited"), result.output().lines().toList());
+    }
+
+    @Test
     void excludedPathsRemainAvailableForHierarchyResolution(@TempDir Path directory) throws Exception {
         var parents = directory.resolve("parents");
         var candidates = directory.resolve("candidates");

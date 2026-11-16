@@ -37,6 +37,7 @@ final class ClassHierarchy implements Closeable {
     private final URLClassLoader classPath;
     private FileSystem system;
     private boolean closeSystem;
+    private Map<String, Set<String>> systemPackages;
 
     private ClassHierarchy(Options options, SearchEnvironment environment) throws IOException, ToolException {
         this.environment = environment;
@@ -256,11 +257,12 @@ final class ClassHierarchy implements Closeable {
         if (known != null) {
             return known;
         }
-        var model = classPathClass(name);
+        var candidates = SearchEnvironment.classFileCandidates(name);
+        var model = classPathClass(candidates);
         if (model == null) {
-            model = moduleClass(name);
+            model = moduleClass(candidates);
             if (model == null) {
-                model = systemClass(name);
+                model = systemClass(candidates);
             }
         }
         List<String> parents;
@@ -272,7 +274,7 @@ final class ClassHierarchy implements Closeable {
             }
         } else {
             parents = List.of();
-            if (SearchEnvironment.classFileCandidates(name).stream().anyMatch(sources::mayHaveOrdinarySource)) {
+            if (candidates.stream().anyMatch(sources::mayHaveOrdinarySource)) {
                 var source = environment.resolveSourceFile(name);
                 if (source != null) {
                     sourceTypes.add(name);
@@ -291,9 +293,9 @@ final class ClassHierarchy implements Closeable {
         }
     }
 
-    private ClassModel classPathClass(String name) throws IOException {
+    private ClassModel classPathClass(List<String> candidates) throws IOException {
         // Resolve resources without loading classes or applying javac's --release to multi-release jars.
-        for (var candidate : SearchEnvironment.classFileCandidates(name)) {
+        for (var candidate : candidates) {
             var resource = classPath.findResource(candidate);
             if (resource == null) {
                 continue;
@@ -307,8 +309,8 @@ final class ClassHierarchy implements Closeable {
         return null;
     }
 
-    private ClassModel moduleClass(String name) throws IOException, ToolException {
-        for (var candidate : SearchEnvironment.classFileCandidates(name)) {
+    private ClassModel moduleClass(List<String> candidates) throws IOException, ToolException {
+        for (var candidate : candidates) {
             for (var module : environment.moduleInputs()) {
                 if (!module.includesResource(candidate)) {
                     continue;
@@ -322,16 +324,22 @@ final class ClassHierarchy implements Closeable {
         return null;
     }
 
-    private ClassModel systemClass(String name) throws IOException, ToolException {
+    private ClassModel systemClass(List<String> candidates) throws IOException, ToolException {
         if (system == null) {
             return null;
         }
-        for (var candidate : SearchEnvironment.classFileCandidates(name)) {
-            for (var module : environment.modules().systemPackages().keySet()) {
-                if (!environment.includesSystemResource(module, candidate)) {
+        if (systemPackages == null) {
+            systemPackages = environment.systemModulePackages();
+        }
+        for (var candidate : candidates) {
+            int slash = candidate.lastIndexOf('/');
+            var packageName = slash < 0 ? "" : candidate.substring(0, slash).replace('/', '.');
+            for (var module : systemPackages.entrySet()) {
+                if (!module.getValue().contains(packageName)
+                        || !environment.includesSystemResource(module.getKey(), candidate)) {
                     continue;
                 }
-                var file = system.getPath("/modules", module, candidate);
+                var file = system.getPath("/modules", module.getKey(), candidate);
                 if (Files.isRegularFile(file)) {
                     return CLASS_FILE.parse(Files.readAllBytes(file));
                 }

@@ -222,6 +222,30 @@ class RelationshipQueryTest {
     }
 
     @Test
+    void excludedSystemAncestorsResolveThroughUnexportedPackages(@TempDir Path directory) throws Exception {
+        var source = directory.resolve("Item.java");
+        var classes = directory.resolve("classes");
+        Files.writeString(source, """
+                package example;
+                public abstract class Item extends jdk.internal.ref.PhantomCleanable<Object> {
+                    public Item(Object value) { super(value, java.lang.ref.Cleaner.create()); }
+                }
+                """);
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null,
+                    List.of("-d", classes.toString(), "--add-exports", "java.base/jdk.internal.ref=ALL-UNNAMED"),
+                    null, manager.getJavaFileObjects(source)).call());
+        }
+
+        var result = run("--class-path", classes.toString(), "--exclude-system-modules",
+                "--subtypes", "java.lang.ref.PhantomReference");
+
+        assertSuccess(result);
+        assertEquals("class example.Item\n", result.output());
+    }
+
+    @Test
     void excludedMultiReleaseAncestorsUseTheSearchedRuntimeVersion(@TempDir Path directory) throws Exception {
         var ancestor = directory.resolve("src/example/Ancestor.java");
         var child = directory.resolve("src/example/Child.java");

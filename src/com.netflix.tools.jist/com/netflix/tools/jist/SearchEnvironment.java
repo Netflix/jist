@@ -302,6 +302,16 @@ final class SearchEnvironment {
         return modules().applicationModules();
     }
 
+    Map<String, Set<String>> systemModulePackages() throws IOException, ToolException {
+        var references = systemModuleReferences(options.system());
+        var packages = new LinkedHashMap<String, Set<String>>();
+        for (var name : modules().systemPackages().keySet()) {
+            // Resolution also needs unexported packages, unlike declaration visibility.
+            packages.put(name, references.get(name).descriptor().packages());
+        }
+        return packages;
+    }
+
     private static ModuleResolution computeModuleResolution(Options opts) throws IOException, ToolException {
         var entries = parsePathList(opts.modulePath());
         var applicationFinder = java.lang.module.ModuleFinder.of(entries.toArray(Path[]::new));

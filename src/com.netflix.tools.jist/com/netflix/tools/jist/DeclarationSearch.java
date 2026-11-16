@@ -684,9 +684,10 @@ final class DeclarationSearch {
                         if (!emittedSources.add(origin)) {
                             return;
                         }
-                        var model = SourceModel.parse(Files.readAllBytes(sourceFile));
+                        var parsed = relationships != null ? relationships.sourceDeclaration(sourceFile) : null;
+                        var model = parsed != null ? parsed.model() : SourceModel.parse(Files.readAllBytes(sourceFile));
                         var fileName = sourceFile.getFileName().toString();
-                        var structure = model.structure(fileName, visibility);
+                        var structure = parsed != null ? parsed.structure() : model.structure(fileName, visibility);
                         if (structure.classNames().isEmpty() && structure.packageName().isEmpty()) {
                             return;
                         }
@@ -722,9 +723,6 @@ final class DeclarationSearch {
                             }
                         }
                         var unitName = sourceUnitName(structure, fileName);
-                        if (relationships != null) {
-                            relationships.readSourceUnit(unitName);
-                        }
                         var matches = contextMatches(structure, opts);
                         if (matches.isEmpty()) {
                             return;

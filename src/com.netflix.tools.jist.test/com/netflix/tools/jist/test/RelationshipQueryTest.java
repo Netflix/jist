@@ -809,6 +809,51 @@ class RelationshipQueryTest {
     }
 
     @Test
+    void sourceRelationshipsPreserveParsedDeclarationsAndLazyBodyAttribution(@TempDir Path source) throws Exception {
+        var directory = Files.createDirectories(source.resolve("example"));
+        Files.writeString(directory.resolve("Holder.java"), """
+                package example;
+                public class Holder {
+                    public static class Nested extends Base {
+                        /** Runs the value. */
+                        public void run(String value) { missingBodyOnly(); }
+                    }
+                }
+                record Secondary(int value) implements Root<String> {
+                    public void run(String value) {}
+                    public void run(int value) {}
+                }
+                """);
+
+        var types = run("--source-path", source.toString(), "--subtypes", "example.Root", "--visibility", "all");
+        assertSuccess(types);
+        assertTrue(types.output().contains("class example.Holder.Nested\n"), types.output());
+        assertTrue(types.output().contains("record example.Secondary\n"), types.output());
+        var methods = render("--source-path", source.toString(), "--overrides", "example.Root.run",
+                "--visibility", "all", "--source", "definition");
+        assertEquals(0, methods.code(), methods.error());
+        assertTrue(methods.output().contains("Holder.java:4):         /** Runs the value. */"), methods.output());
+        assertTrue(methods.output().contains("Holder.java:5):         public void run(String value) { missingBodyOnly(); }"), methods.output());
+        assertTrue(methods.output().contains("Holder.java:9):     public void run(String value) {}"), methods.output());
+        assertTrue(methods.output().contains("Holder.java:10):     public void run(int value) {}"), methods.output());
+    }
+
+    @Test
+    void sourceRelationshipsUseTheFirstSourcePathDefinition(@TempDir Path directory) throws Exception {
+        var first = Files.createDirectories(directory.resolve("first/example"));
+        var second = Files.createDirectories(directory.resolve("second/example"));
+        var fileName = "NewLeaf.java";
+        Files.writeString(first.resolve(fileName), "package example; public abstract class NewLeaf extends Base {}");
+        Files.writeString(second.resolve(fileName), "package example; public class NewLeaf extends Unrelated {}");
+
+        var result = run("--source-path", first.getParent() + File.pathSeparator + second.getParent(),
+                "--subtypes", "example.Root");
+
+        assertSuccess(result);
+        assertEquals(1, result.output().lines().filter(line -> line.equals("class example.NewLeaf")).count(), result.output());
+    }
+
+    @Test
     void completesRelationshipTargets() {
         for (var option : List.of("--subtypes", "--supertypes", "--overrides")) {
             var output = new StringWriter();

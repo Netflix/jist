@@ -125,62 +125,53 @@ final class DeclarationSearch {
             boolean visibleType,
             SymbolKind kind) {}
 
-    private static final class OrderedClassFiles implements AutoCloseable {
-        private final PrintWriter out;
-        private final Options options;
-        private final Visibility visibility;
-        private final Set<String> emittedPackages;
-        private final SourceLookup sources;
+    @FunctionalInterface
+    private interface ClassFileConsumer<T> {
+        void accept(T value) throws IOException, ToolException;
+    }
+
+    private static class OrderedClassReads<T> implements AutoCloseable {
         private final ExecutorService executor;
-        private final Deque<Future<ListedClass>> pending = new ArrayDeque<>();
+        private final ClassFileConsumer<T> consumer;
+        private final Deque<Future<T>> pending = new ArrayDeque<>();
         private boolean finished;
 
-        OrderedClassFiles(PrintWriter out, Options options, Visibility visibility,
-                          Set<String> emittedPackages, SourceLookup sources, ExecutorService executor) {
-            this.out = out;
-            this.options = options;
-            this.visibility = visibility;
-            this.emittedPackages = emittedPackages;
-            this.sources = sources;
+        OrderedClassReads(ExecutorService executor, ClassFileConsumer<T> consumer) {
             this.executor = executor;
+            this.consumer = consumer;
         }
 
-        void submit(String resourceName, String className, ClassModelReader reader) throws IOException {
-            if (reader == null && pending.isEmpty()) {
-                emit(prepareListedClass(resourceName, className, null, options, visibility, sources));
-                return;
-            }
-            Future<ListedClass> future;
-            if (reader == null) {
-                future = CompletableFuture.completedFuture(prepareListedClass(resourceName, className, null, options, visibility, sources));
+        void submit(Callable<T> reader) throws IOException, ToolException {
+            enqueue(executor.submit(reader));
+        }
+
+        void add(T value) throws IOException, ToolException {
+            if (pending.isEmpty()) {
+                consumer.accept(value);
             } else {
-                future = executor.submit(() -> prepareListedClass(resourceName, className, reader.read(), options, visibility,
-                        sources));
+                enqueue(CompletableFuture.completedFuture(value));
             }
+        }
+
+        private void enqueue(Future<T> future) throws IOException, ToolException {
             pending.addLast(future);
             if (pending.size() == CLASS_FILE_WINDOW) {
                 emitFirst();
             }
         }
 
-        void finish() throws IOException {
+        void finish() throws IOException, ToolException {
             while (!pending.isEmpty()) {
                 emitFirst();
             }
             finished = true;
         }
 
-        private void emitFirst() throws IOException {
-            emit(await(pending.removeFirst()));
+        private void emitFirst() throws IOException, ToolException {
+            consumer.accept(await(pending.removeFirst()));
         }
 
-        private void emit(ListedClass listedClass) {
-            if (listedClass != null) {
-                addListedClassSymbols(out, listedClass, options, visibility, emittedPackages);
-            }
-        }
-
-        private static ListedClass await(Future<ListedClass> future) throws IOException {
+        private static <T> T await(Future<T> future) throws IOException {
             try {
                 return future.get();
             } catch (InterruptedException failure) {
@@ -210,6 +201,51 @@ final class DeclarationSearch {
                 executor.shutdownNow();
                 executor.close();
             }
+        }
+    }
+
+    private static final class OrderedClassFiles extends OrderedClassReads<ListedClass> {
+        private final Options options;
+        private final Visibility visibility;
+        private final SourceLookup sources;
+
+        OrderedClassFiles(PrintWriter out, Options options, Visibility visibility,
+                         Set<String> emittedPackages, SourceLookup sources, ExecutorService executor) {
+            super(executor, listedClass -> {
+                if (listedClass != null) {
+                    addListedClassSymbols(out, listedClass, options, visibility, emittedPackages);
+                }
+            });
+            this.options = options;
+            this.visibility = visibility;
+            this.sources = sources;
+        }
+
+        void submit(String resourceName, String className, ClassModelReader reader) throws IOException, ToolException {
+            if (reader == null) {
+                add(prepareListedClass(resourceName, className, null, options, visibility, sources));
+            } else {
+                submit(() -> prepareListedClass(resourceName, className, reader.read(), options, visibility, sources));
+            }
+        }
+    }
+
+    private record ClassContext(ClassModel model, String location) {}
+
+    private final class SourceClassFiles extends OrderedClassReads<ClassContext> {
+        SourceClassFiles(Options opts, PrintWriter out, Visibility visibility, SourceLookup sources,
+                         Set<String> emittedSources, Set<String> emittedPackages,
+                         Map<String, EnumeratedSource> parsedSources, ExecutorService executor) {
+            super(executor, context -> emitClassSourceContext(opts, out, context.model(), context.location(),
+                    visibility, sources, emittedSources, emittedPackages, parsedSources));
+        }
+
+        void submit(Path file, String location) throws IOException, ToolException {
+            submit(() -> new ClassContext(CLASS_FILE.parse(readClassFile(file)), location));
+        }
+
+        void submit(Path file, String location, long size) throws IOException, ToolException {
+            submit(() -> new ClassContext(CLASS_FILE.parse(readClassFile(file, size)), location));
         }
     }
 
@@ -248,7 +284,8 @@ final class DeclarationSearch {
         var emittedSources = new HashSet<String>();
         var emittedPackages = new HashSet<String>();
         var parsedSources = new HashMap<String, EnumeratedSource>();
-        try (var sources = environment.sources()) {
+        try (var sources = environment.sources();
+             var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             sources.prepareOrdinarySources();
             if (!opts.excludeApplicationClasses()) {
                 if (readsUnnamedModule(opts)) {
@@ -264,7 +301,8 @@ final class DeclarationSearch {
                                 sources,
                                 emittedSources,
                                 emittedPackages,
-                                parsedSources);
+                                parsedSources,
+                                executor);
                     }
                 }
                 for (var module : environment.moduleInputs()) {
@@ -290,7 +328,8 @@ final class DeclarationSearch {
                             sources,
                             emittedSources,
                             emittedPackages,
-                            parsedSources);
+                            parsedSources,
+                            executor);
                     if (opts.kinds().isEmpty() || opts.listsPackages()) {
                         for (var packageName : module.visiblePackages()
                                 .stream()
@@ -305,7 +344,7 @@ final class DeclarationSearch {
                 }
             }
             listSystemSourceContexts(opts, out, visibility, sources, emittedSources, emittedPackages,
-                    parsedSources);
+                    parsedSources, executor);
             listUncompiledSourceContexts(opts, out, sources, emittedSources, emittedPackages);
         }
         out.flush();
@@ -331,39 +370,38 @@ final class DeclarationSearch {
             SourceLookup sources,
             Set<String> emittedSources,
             Set<String> emittedPackages,
-            Map<String, EnumeratedSource> parsedSources)
+            Map<String, EnumeratedSource> parsedSources,
+            ExecutorService executor)
             throws IOException, ToolException {
         if (!environment.searches(entry)) {
             return;
         }
         if (Files.isDirectory(entry)) {
-            walkFilesInDeclarationOrder(entry,
-                    classFile -> {
-                        if (!classFile.toString().endsWith(CLASS_EXT)) {
-                            return;
-                        }
-                        var resourceName = entry.relativize(classFile)
-                                                .toString()
-                                                .replace(File.separatorChar, '/');
-                        if (!filter.test(resourceName)
-                                || !visibleClassResource(resourceName, moduleName, visiblePackages, opts)
-                                || !mayMatchCompiledResource(resourceName)) {
-                            return;
-                        }
-                        emitClassSourceContext(
-                                opts,
-                                out,
-                                ClassFile.of().parse(Files.readAllBytes(classFile)),
-                                unitLocation(classFile),
-                                visibility,
-                                sources,
-                                emittedSources,
-                                emittedPackages,
-                                parsedSources);
-                    });
+            try (var classes = new SourceClassFiles(opts, out, visibility, sources, emittedSources, emittedPackages,
+                    parsedSources, executor)) {
+                walkFilesInDeclarationOrder(entry, classFile -> {
+                    if (!classFile.toString().endsWith(CLASS_EXT)) {
+                        return;
+                    }
+                    var resourceName = entry.relativize(classFile)
+                                            .toString()
+                                            .replace(File.separatorChar, '/');
+                    if (!filter.test(resourceName)
+                            || !visibleClassResource(resourceName, moduleName, visiblePackages, opts)
+                            || !mayMatchCompiledResource(resourceName)) {
+                        return;
+                    }
+                    classes.submit(classFile, unitLocation(classFile));
+                });
+                classes.finish();
+            }
         } else if (Files.isRegularFile(entry)) {
-            try (var jar = ClassPaths.openArchive(entry, false)) {
+            try (var jar = ClassPaths.openArchive(entry, false);
+                 var archive = openParallelArchive(entry);
+                 var classes = new SourceClassFiles(opts, out, visibility, sources, emittedSources, emittedPackages,
+                         parsedSources, executor)) {
                 var iterator = jarEntries(jar);
+                var scheduledPackages = new HashSet<String>();
                 var origin = "jar:" + entry.toAbsolutePath()
                         .normalize()
                         .toUri()
@@ -381,18 +419,18 @@ final class DeclarationSearch {
                             var packageName = jarEntry.getName()
                                     .substring(0, slash)
                                     .replace('/', '.');
-                            if (!emittedPackages.contains(packageName)) {
+                            if (!emittedPackages.contains(packageName) && scheduledPackages.add(packageName)) {
                                 var packageInfo = jar.getJarEntry(jarEntry.getName().substring(0, slash + 1) + "package-info.class");
                                 if (packageInfo != null && filter.test(packageInfo.getName()) && visibleClassResource(packageInfo.getName(), moduleName, visiblePackages, opts)) {
-                                    emitClassSourceContext(opts, out, CLASS_FILE.parse(readJarEntry(jar, packageInfo)), origin + packageInfo.getRealName(),
-                                            visibility, sources, emittedSources, emittedPackages, parsedSources);
+                                    classes.submit(archive.getPath("/" + packageInfo.getRealName()), origin + packageInfo.getRealName(),
+                                            packageInfo.getSize());
                                 }
                             }
                         }
                     }
-                    emitClassSourceContext(opts, out, CLASS_FILE.parse(readJarEntry(jar, jarEntry)), origin + jarEntry.getRealName(),
-                            visibility, sources, emittedSources, emittedPackages, parsedSources);
+                    classes.submit(archive.getPath("/" + jarEntry.getRealName()), origin + jarEntry.getRealName(), jarEntry.getSize());
                 }
+                classes.finish();
             }
         }
     }
@@ -425,7 +463,8 @@ final class DeclarationSearch {
             SourceLookup sources,
             Set<String> emittedSources,
             Set<String> emittedPackages,
-            Map<String, EnumeratedSource> parsedSources)
+            Map<String, EnumeratedSource> parsedSources,
+            ExecutorService executor)
             throws IOException, ToolException {
         var system = opts.system();
         if (opts.excludeSystemModules() || "none".equals(system)) {
@@ -466,24 +505,19 @@ final class DeclarationSearch {
                     if (visiblePackages == null) {
                         continue;
                     }
-                    walkFilesInDeclarationOrder(module, classFile -> {
-                        var resourceName = module.relativize(classFile).toString();
-                        if (!environment.includesSystemResource(module.getFileName().toString(), resourceName)
-                                || !visibleClassResource(resourceName, module.getFileName().toString(), visiblePackages, opts)
-                                || !mayMatchCompiledResource(resourceName)) {
-                            return;
-                        }
-                        emitClassSourceContext(
-                                opts,
-                                out,
-                                ClassFile.of().parse(Files.readAllBytes(classFile)),
-                                unitLocation(classFile),
-                                visibility,
-                                sources,
-                                emittedSources,
-                                emittedPackages,
-                                parsedSources);
-                    });
+                    try (var classes = new SourceClassFiles(opts, out, visibility, sources, emittedSources, emittedPackages,
+                            parsedSources, executor)) {
+                        walkFilesInDeclarationOrder(module, classFile -> {
+                            var resourceName = module.relativize(classFile).toString();
+                            if (!environment.includesSystemResource(module.getFileName().toString(), resourceName)
+                                    || !visibleClassResource(resourceName, module.getFileName().toString(), visiblePackages, opts)
+                                    || !mayMatchCompiledResource(resourceName)) {
+                                return;
+                            }
+                            classes.submit(classFile, unitLocation(classFile));
+                        });
+                        classes.finish();
+                    }
                     if (opts.kinds().isEmpty() || opts.listsPackages()) {
                         for (var packageName : visiblePackages.stream()
                                 .sorted()
@@ -1107,7 +1141,10 @@ final class DeclarationSearch {
     }
 
     private static byte[] readClassFile(Path file) throws IOException {
-        long size = Files.size(file);
+        return readClassFile(file, Files.size(file));
+    }
+
+    private static byte[] readClassFile(Path file, long size) throws IOException {
         if (size < 0 || size > Integer.MAX_VALUE) {
             return Files.readAllBytes(file);
         }
@@ -1116,28 +1153,6 @@ final class DeclarationSearch {
             int read = input.readNBytes(bytes, 0, bytes.length);
             if (read != bytes.length) {
                 throw new EOFException("Expected " + bytes.length + " bytes for " + file + ", read " + read);
-            }
-        }
-        return bytes;
-    }
-
-    private static byte[] readJarEntry(JarFile jar, JarEntry entry) throws IOException {
-        long size = entry.getSize();
-        if (size < 0 || size > Integer.MAX_VALUE) {
-            try (var input = jar.getInputStream(entry)) {
-                return input.readAllBytes();
-            }
-        }
-        var bytes = new byte[(int) size];
-        try (var input = jar.getInputStream(entry)) {
-            int read = input.readNBytes(bytes, 0, bytes.length);
-            if (read != bytes.length) {
-                throw new EOFException("Expected "
-                        + bytes.length
-                        + " bytes for "
-                        + entry.getName()
-                        + ", read "
-                        + read);
             }
         }
         return bytes;

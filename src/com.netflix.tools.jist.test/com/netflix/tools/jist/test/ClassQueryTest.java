@@ -21,6 +21,9 @@ import java.io.StringWriter;
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.ClassTransform;
 import java.lang.classfile.attribute.SourceFileAttribute;
+import java.lang.constant.ClassDesc;
+import java.lang.constant.ConstantDescs;
+import java.lang.constant.MethodTypeDesc;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -510,6 +513,43 @@ class ClassQueryTest {
                 classFileResult.output());
         assertFalse(classFileResult.output().contains("Example.java:"),
                 classFileResult.output());
+    }
+
+    @Test
+    void sourceContextsPreserveArchiveAndDirectoryOrder(@TempDir Path directory) throws IOException {
+        var archive = directory.resolve("ordered.jar");
+        var sourceArchive = directory.resolve("ordered-sources.jar");
+        var classes = Files.createDirectories(directory.resolve("classes/ordered"));
+        var expected = new java.util.ArrayList<String>();
+        int count = Runtime.getRuntime().availableProcessors() * 2 + 5;
+        try (var jar = new JarOutputStream(Files.newOutputStream(archive));
+                var sources = new JarOutputStream(Files.newOutputStream(sourceArchive))) {
+            for (int index = count - 1; index >= 0; index--) {
+                var name = "Type" + index;
+                var bytes = ClassFile.of().build(ClassDesc.of("ordered." + name), builder -> builder
+                        .withFlags(ClassFile.ACC_PUBLIC)
+                        .with(SourceFileAttribute.of(name + ".java"))
+                        .withMethodBody("work", MethodTypeDesc.of(ConstantDescs.CD_void), ClassFile.ACC_PUBLIC,
+                                code -> code.return_()));
+                Files.write(classes.resolve(name + ".class"), bytes);
+                jar.putNextEntry(new JarEntry("ordered/" + name + ".class"));
+                jar.write(bytes);
+                jar.closeEntry();
+                sources.putNextEntry(new JarEntry("ordered/" + name + ".java"));
+                sources.write(("package ordered;\n\npublic class " + name + " {\n    public void work() {}\n}\n")
+                        .getBytes(StandardCharsets.UTF_8));
+                sources.closeEntry();
+                expected.add("ordered." + name + "(" + name + ".java:4):     public void work() {}");
+            }
+        }
+        for (var input : List.of(archive, classes.getParent())) {
+            var result = run("--system", "none", "--class-path", input.toString(),
+                    "--source-path", sourceArchive.toString(), "--source", "signature", "--kind", "method", "work");
+            assertEquals(0, result.exitCode(), result.error());
+            assertEquals("", result.error());
+            assertEquals(input.equals(archive) ? expected : expected.stream().sorted().toList(),
+                    result.output().lines().toList());
+        }
     }
 
     @Test
@@ -1759,6 +1799,19 @@ class ClassQueryTest {
                 result.output());
         assertTrue(result.output().contains("return amount + 1;"),
                 result.output());
+    }
+
+    @Test
+    void simpleNameReadsSourceForSelectedMultiReleaseClass() {
+        var result = run("--system", "none", "--class-path", MULTI_RELEASE_JAR.toString(),
+                "--source-path", MULTI_RELEASE_SOURCE_JAR.toString(), "--source", "definition",
+                "--show-origin", "--kind", "method", "marker");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals("", result.error());
+        assertTrue(result.output().contains("versioned-sources.jar!/META-INF/versions/9/com/example/Versioned.java"),
+                result.output());
+        assertTrue(result.output().contains("return \"versioned\";"), result.output());
     }
 
     @Test

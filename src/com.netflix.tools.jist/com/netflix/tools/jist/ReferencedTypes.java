@@ -31,6 +31,43 @@ import com.sun.source.util.TreePathScanner;
 final class ReferencedTypes {
     static void list(Options options, SearchEnvironment environment, PrintWriter out) throws IOException, ToolException {
         var target = options.referencedTypes();
+        var results = new LinkedHashMap<String, SymbolKind>();
+        if (DeclarationSearch.simpleNameTarget(target)) {
+            var selected = options.targetSearch(target, Set.of(SymbolKind.TYPE));
+            var resolution = new SearchEnvironment(selected);
+            var targets = new TypeTargets();
+            new DeclarationSearch(resolution).listClasses(selected, targets);
+            if (targets.names.isEmpty()) throw ToolException.notFound("Class or Java source not found: " + target);
+            for (var name : targets.names) {
+                collect(options, resolution, name, results);
+            }
+        } else {
+            collect(options, environment, target, results);
+        }
+        results.forEach((name, kind) -> out.println(kind.optionName() + " " + name));
+        out.flush();
+    }
+
+    private static final class TypeTargets extends PrintWriter implements Output.SymbolOutput {
+        private final Set<String> names = new LinkedHashSet<>();
+
+        TypeTargets() {
+            super(Writer.nullWriter());
+        }
+
+        @Override
+        public boolean listOnly() {
+            return true;
+        }
+
+        @Override
+        public void symbol(SymbolKind kind, String name, String location) {
+            names.add(name);
+        }
+    }
+
+    private static void collect(Options options, SearchEnvironment environment, String target,
+            Map<String, SymbolKind> results) throws IOException, ToolException {
         var file = Path.of(target).toAbsolutePath().normalize();
         Path sourceFile = null;
         SearchEnvironment.ResolvedClass compiled;
@@ -48,7 +85,6 @@ final class ReferencedTypes {
             compiled = resolve(options, environment, target);
             if (compiled == null) sourceFile = environment.resolveSourceFile(target);
         }
-        var results = new LinkedHashMap<String, SymbolKind>();
         if (compiled == null) {
             if (sourceFile == null) throw ToolException.notFound("Class or Java source not found: " + target);
             try (var analysis = JavaAnalysis.open(options, environment, List.of(sourceFile))) {
@@ -97,8 +133,6 @@ final class ReferencedTypes {
                 }
             }
         }
-        results.forEach((name, kind) -> out.println(kind.optionName() + " " + name));
-        out.flush();
     }
 
     private static SearchEnvironment.ResolvedClass resolve(Options options, SearchEnvironment environment, String name)

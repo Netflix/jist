@@ -121,7 +121,7 @@ public record Options(
         return withTargetAndKinds(target, selectedKinds);
     }
 
-    Options executableTargetSearch(String selectedTarget) {
+    Options targetSearch(String selectedTarget, Set<SymbolKind> selectedKinds) {
         return new Options(
                 classPath,
                 sourcePath,
@@ -141,7 +141,7 @@ public record Options(
                 addReads,
                 limitModules,
                 Visibility.ALL,
-                Set.of(SymbolKind.TYPE, SymbolKind.METHOD),
+                Set.copyOf(selectedKinds),
                 usages,
                 subtypes,
                 supertypes,

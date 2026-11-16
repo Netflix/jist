@@ -25,6 +25,8 @@ import javax.tools.ToolProvider;
 import com.netflix.tools.jist.Jist;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -208,6 +210,61 @@ class ReferencedTypesTest {
         assertFalse(result.output().contains("not.a.RealClass"), result.output());
         assertFalse(result.output().contains("class example.Example"), result.output());
         assertEquals(result.output(), run(Path.of("example.Example"), "--class-path", classes.toString()).output());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void simpleNamesResolveAllMatchingTypes(boolean compiled) throws Exception {
+        var first = source("first/Example.java", "package first; public class Example { java.nio.file.Path path; }");
+        var second = source("second/Example.java", "package second; public class Example { java.util.List<?> values; }");
+        String pathOption;
+        Path input;
+        if (compiled) {
+            var classes = compile(first);
+            compile(second);
+            pathOption = "--class-path";
+            input = classes;
+        } else {
+            pathOption = "--source-path";
+            input = directory;
+        }
+        var result = run(Path.of("Example"), pathOption, input.toString());
+        success(result);
+        assertTrue(result.output().contains("interface java.nio.file.Path\n"), result.output());
+        assertTrue(result.output().contains("interface java.util.List\n"), result.output());
+        assertEquals(result.output().lines().count(), result.output().lines().distinct().count());
+        for (var name : List.of("first.Example", "second.Example")) {
+            var qualified = run(Path.of(name), pathOption, input.toString());
+            success(qualified);
+            assertTrue(qualified.output().lines().allMatch(result.output().lines().toList()::contains), result.output());
+        }
+    }
+
+    @Test
+    void simpleNamesResolveNestedSourceTypes() throws Exception {
+        source("example/Outer.java", "package example; public class Outer { public static class Nested { java.nio.file.Path path; } }");
+        var result = run(Path.of("Nested"), "--source-path", directory.toString());
+        success(result);
+        assertEquals("interface java.nio.file.Path\n", result.output());
+    }
+
+    @Test
+    void simpleNamesResolveSystemTypes() {
+        var qualified = run(Path.of("java.lang.Runnable"), "--source", "none");
+        var simple = run(Path.of("Runnable"), "--source", "none");
+        success(qualified);
+        success(simple);
+        assertEquals(qualified.output(), simple.output());
+    }
+
+    @Test
+    void referencedTypeResolutionRetainsExcludedInputs() throws Exception {
+        var file = source("example/Example.java", "package example; public class Example { java.nio.file.Path path; }");
+        var classes = compile(file);
+        var result = run(Path.of("Example"), "--class-path", classes.toString(), "--source", "none",
+                "--exclude-application-classes", "--exclude-system-modules", "--exclude-path", classes.toString());
+        success(result);
+        assertTrue(result.output().contains("interface java.nio.file.Path\n"), result.output());
     }
 
     @Test

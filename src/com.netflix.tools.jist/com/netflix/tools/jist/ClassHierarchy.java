@@ -27,12 +27,12 @@ import static com.netflix.tools.jist.SearchEnvironment.readsUnnamedModule;
 final class ClassHierarchy implements Closeable {
     private static final ClassFile CLASS_FILE = ClassFile.of();
 
-    private final Map<String, Node> types = new ConcurrentHashMap<>();
+    private final Map<String, List<String>> types = new HashMap<>();
     private final Map<String, List<String>> resolvedParents = new HashMap<>();
     private final SearchEnvironment environment;
     private final SourceLookup sources;
-    private final Set<String> sourceTypes = ConcurrentHashMap.newKeySet();
-    private final Set<Path> sourceFiles = ConcurrentHashMap.newKeySet();
+    private final Set<String> sourceTypes = new HashSet<>();
+    private final Set<Path> sourceFiles = new HashSet<>();
     private final URLClassLoader classPath;
     private FileSystem system;
     private boolean closeSystem;
@@ -166,7 +166,6 @@ final class ClassHierarchy implements Closeable {
         for (var candidate : types.keySet()) {
             if ((includeTargets || !targets.contains(candidate))
                     && (direct ? types.get(candidate)
-                                      .parents()
                                       .stream()
                                       .anyMatch(targets::contains)
                             : reaches(candidate, targets, memo, new HashSet<>()))) {
@@ -178,14 +177,12 @@ final class ClassHierarchy implements Closeable {
 
     private void scan(List<Input> inputs) throws IOException, ToolException {
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            for (int index = 0; index < inputs.size(); index++) {
-                int inputOrder = index;
-                var input = inputs.get(index);
+            for (var input : inputs) {
                 try (var root = CompiledInputs.Root.open(input.path());
-                     var reads = new CompiledInputs.OrderedReads<ClassModel>(executor, model -> add(inputOrder, model))) {
+                     var reads = new CompiledInputs.OrderedReads<PreparedClass>(executor, this::add)) {
                     root.forEach(false, resource -> {
                         if (input.filter().test(resource.resource())) {
-                            reads.submit(() -> CLASS_FILE.parse(resource.read()));
+                            reads.submit(() -> prepare(CLASS_FILE.parse(resource.read())));
                         }
                     });
                     reads.finish();
@@ -215,59 +212,61 @@ final class ClassHierarchy implements Closeable {
         return result;
     }
 
-    private void add(int inputOrder, ClassModel model) {
+    private PreparedClass prepare(ClassModel model) {
         if (model.isModuleInfo()) {
-            return;
+            return null;
         }
-        rememberSource(model);
-        var node = new Node(inputOrder, parents(model));
-        types.compute(UsageSearch.displayClassName(model),
-                (_, existing) ->
-                        existing == null || inputOrder < existing.inputOrder()
-                                ? node
-                                : existing);
+        var internalName = model.thisClass().asInternalName();
+        var source = sources.mayHaveOrdinarySource(internalName) ? sources.ordinarySource(model) : null;
+        return new PreparedClass(displayName(internalName), parents(model), source);
+    }
+
+    private void add(PreparedClass prepared) {
+        rememberSource(prepared);
+        types.putIfAbsent(prepared.name(), prepared.parents());
     }
 
     private List<String> parents(String name) throws IOException, ToolException {
-        var node = types.get(name);
-        if (node != null) {
-            return node.parents();
+        var scanned = types.get(name);
+        if (scanned != null) {
+            return scanned;
         }
         var known = resolvedParents.get(name);
         if (known != null) {
             return known;
         }
         var model = classPathClass(name);
-        List<String> parents;
-        if (model != null) {
-            parents = parents(model);
-        } else {
+        if (model == null) {
             model = moduleClass(name);
             if (model == null) {
                 model = systemClass(name);
             }
-            parents = model == null ? List.of() : parents(model);
         }
+        List<String> parents;
         if (model != null) {
-            rememberSource(model);
-        } else if (SearchEnvironment.classFileCandidates(name).stream().anyMatch(sources::mayHaveOrdinarySource)) {
-            var source = environment.resolveSourceFile(name);
-            if (source != null) {
-                sourceTypes.add(name);
-                sourceFiles.add(source);
+            var prepared = prepare(model);
+            parents = prepared == null ? List.of() : prepared.parents();
+            if (prepared != null) {
+                rememberSource(prepared);
+            }
+        } else {
+            parents = List.of();
+            if (SearchEnvironment.classFileCandidates(name).stream().anyMatch(sources::mayHaveOrdinarySource)) {
+                var source = environment.resolveSourceFile(name);
+                if (source != null) {
+                    sourceTypes.add(name);
+                    sourceFiles.add(source);
+                }
             }
         }
         resolvedParents.put(name, parents);
         return parents;
     }
 
-    private void rememberSource(ClassModel model) {
-        if (sources.mayHaveOrdinarySource(model.thisClass().asInternalName())) {
-            var source = sources.ordinarySource(model);
-            if (source != null) {
-                sourceTypes.add(UsageSearch.displayClassName(model));
-                sourceFiles.add(source);
-            }
+    private void rememberSource(PreparedClass prepared) {
+        if (prepared.source() != null) {
+            sourceTypes.add(prepared.name());
+            sourceFiles.add(prepared.source());
         }
     }
 
@@ -333,5 +332,5 @@ final class ClassHierarchy implements Closeable {
 
     private record Input(Path path, Filter filter) {}
 
-    private record Node(int inputOrder, List<String> parents) {}
+    private record PreparedClass(String name, List<String> parents, Path source) {}
 }

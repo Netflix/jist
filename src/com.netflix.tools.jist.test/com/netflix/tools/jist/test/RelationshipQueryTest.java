@@ -546,6 +546,43 @@ class RelationshipQueryTest {
     }
 
     @Test
+    void hierarchyUsesTheFirstClassPathDefinition(@TempDir Path directory) throws Exception {
+        var source = directory.resolve("Base.java");
+        var classes = directory.resolve("classes");
+        Files.writeString(source, """
+                package example;
+                public abstract class Base extends Unrelated {
+                    public abstract void run(String value);
+                    public void run(int value) {}
+                }
+                """);
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        try (var manager = compiler.getStandardFileManager(null, null, null)) {
+            assertTrue(compiler.getTask(null, manager, null,
+                    List.of("-d", classes.toString(), "--class-path", CLASSES.toString()), null,
+                    manager.getJavaFileObjects(source)).call());
+        }
+        var archive = directory.resolve("replacement.jar");
+        writeJar(archive, classes);
+        for (var first : List.of(archive, CLASSES)) {
+            var second = first.equals(archive) ? CLASSES : archive;
+            var path = first + File.pathSeparator + second;
+            var original = run("--class-path", path, "--exclude-system-modules", "--subtypes", "example.Root");
+            assertSuccess(original);
+            assertEquals(first.equals(archive)
+                            ? List.of("class example.Other", "interface example.Branch")
+                            : List.of("class example.Base", "class example.Inherited", "class example.Leaf",
+                                    "class example.Other", "interface example.Branch"),
+                    original.output().lines().sorted().toList());
+            var replacement = run("--class-path", path, "--exclude-system-modules", "--subtypes", "example.Unrelated");
+            assertSuccess(replacement);
+            assertEquals(first.equals(archive)
+                            ? List.of("class example.Base", "class example.Inherited", "class example.Leaf") : List.of(),
+                    replacement.output().lines().sorted().toList());
+        }
+    }
+
+    @Test
     void repeatedClassPathEntriesDoNotDuplicateDeclarations() {
         var result = run("--class-path", CLASSES + File.pathSeparator + CLASSES, "--overrides", "example.Root.run", "--overrides",
                 "example.Base.run");

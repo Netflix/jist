@@ -89,7 +89,12 @@ final class UsageSearch {
         if (query.path().endsWith(JAVA_EXT) || query.path().endsWith(CLASS_EXT) || Files.isRegularFile(Path.of(query.path()))) {
             throw new ToolException(1, "--usages requires a class or member target");
         }
-        var target = resolveUsageTarget(query, opts);
+        var selections = SymbolTargets.resolve(opts, environment, opts.target(),
+                Set.of(SymbolKind.TYPE, SymbolKind.METHOD, SymbolKind.FIELD));
+        if (selections.isEmpty()) {
+            throw ToolException.notFound("Symbol not found: " + opts.target());
+        }
+        var target = resolveUsageTarget(selections, opts);
         var usageOutput = new UsageOutput(out, err, opts.source());
         scanCompiledUsages(opts, target, usageOutput);
         var visited = new HashSet<Path>();
@@ -361,7 +366,42 @@ final class UsageSearch {
         return method == null ? owner : compiledEnclosingTarget(owner, method.stringValue());
     }
 
-    private UsageTarget resolveUsageTarget(SymbolSelection query, Options opts) throws IOException, ToolException {
+    private UsageTarget resolveUsageTarget(List<SymbolSelection> selections, Options opts) throws IOException, ToolException {
+        var keys = new HashSet<UsageKey>();
+        var bytecodeTypes = new HashSet<String>();
+        var bytecodeOwners = new HashSet<String>();
+        var bytecodeMethods = new HashSet<BytecodeMethodKey>();
+        var bytecodeFields = new HashSet<BytecodeFieldKey>();
+        for (var query : selections) {
+            collectUsageTarget(query, opts, keys, bytecodeTypes, bytecodeOwners, bytecodeMethods, bytecodeFields);
+        }
+        var typeNeedles = bytecodeTypes.stream()
+                .map(name -> name.getBytes(StandardCharsets.UTF_8))
+                .toList();
+        var ownerNeedles = bytecodeOwners.stream()
+                .map(name -> name.getBytes(StandardCharsets.UTF_8))
+                .toList();
+        var descriptorNeedles = bytecodeTypes.stream()
+                .map(name -> "L" + name + ";")
+                .toList();
+        var genericSignatureNeedles = bytecodeTypes.stream()
+                .map(name -> "L" + name + "<")
+                .toList();
+        var memberNeedles = selections.stream()
+                .map(SymbolSelection::member)
+                .filter(member -> member != null && !member.equals("new"))
+                .distinct()
+                .map(member -> member.getBytes(StandardCharsets.UTF_8))
+                .toList();
+        return new UsageTarget(
+                Set.copyOf(keys), Set.copyOf(bytecodeTypes), Set.copyOf(bytecodeMethods), Set.copyOf(bytecodeFields),
+                typeNeedles, ownerNeedles, descriptorNeedles, genericSignatureNeedles, memberNeedles,
+                selections.stream().anyMatch(query -> "new".equals(query.member())));
+    }
+
+    private void collectUsageTarget(SymbolSelection query, Options opts, Set<UsageKey> keys,
+            Set<String> bytecodeTypes, Set<String> bytecodeOwners, Set<BytecodeMethodKey> bytecodeMethods,
+            Set<BytecodeFieldKey> bytecodeFields) throws IOException, ToolException {
         var binaryName = query.path();
         var resolved = readsUnnamedModule(opts) ? resolveClass(binaryName, environment.classPathEntries()) : null;
         if (resolved == null) {
@@ -378,40 +418,18 @@ final class UsageSearch {
         var visibility = opts.visibility() != null
                 ? opts.visibility()
                 : query.member() != null ? Visibility.ALL : Visibility.LIBRARY;
-        var keys = resolved != null ? usageKeys(resolved.classes(), binaryName, query.member(), visibility) : usageKeys(sourceFile, binaryName, query.member(), visibility);
-        if (keys.isEmpty()) {
+        var selectedKeys = resolved != null ? usageKeys(resolved.classes(), binaryName, query.member(), visibility)
+                : usageKeys(sourceFile, binaryName, query.member(), visibility);
+        if (selectedKeys.isEmpty()) {
             throw ToolException.notFound("Member not found: " + binaryName + "." + query.member());
         }
-        var bytecodeTypes = resolved != null ? usageTypeInternalNames(resolved.classes(), binaryName, query.member()) : Set.<String>of();
-        var bytecodeOwners = resolved != null ? usageOwnerInternalNames(resolved.classes(), binaryName) : Set.<String>of();
-        var bytecodeMethods = resolved != null ? usageBytecodeMethods(resolved.classes(), binaryName, query.member(), visibility) : Set.<BytecodeMethodKey>of();
-        var bytecodeFields = resolved != null ? usageBytecodeFields(resolved.classes(), binaryName, query.member(), visibility) : Set.<BytecodeFieldKey>of();
-        var typeNeedles = bytecodeTypes.stream()
-                .map(name -> name.getBytes(StandardCharsets.UTF_8))
-                .toList();
-        var ownerNeedles = bytecodeOwners.stream()
-                .map(name -> name.getBytes(StandardCharsets.UTF_8))
-                .toList();
-        var descriptorNeedles = bytecodeTypes.stream()
-                .map(name -> "L" + name + ";")
-                .toList();
-        var genericSignatureNeedles = bytecodeTypes.stream()
-                .map(name -> "L" + name + "<")
-                .toList();
-        var memberNeedle = query.member() != null && !query.member().equals("new")
-                ? query.member().getBytes(StandardCharsets.UTF_8)
-                : null;
-        return new UsageTarget(
-                Set.copyOf(keys),
-                bytecodeTypes,
-                bytecodeMethods,
-                bytecodeFields,
-                typeNeedles,
-                ownerNeedles,
-                descriptorNeedles,
-                genericSignatureNeedles,
-                memberNeedle,
-                query.member() != null && query.member().equals("new"));
+        keys.addAll(selectedKeys);
+        if (resolved != null) {
+            bytecodeTypes.addAll(usageTypeInternalNames(resolved.classes(), binaryName, query.member()));
+            bytecodeOwners.addAll(usageOwnerInternalNames(resolved.classes(), binaryName));
+            bytecodeMethods.addAll(usageBytecodeMethods(resolved.classes(), binaryName, query.member(), visibility));
+            bytecodeFields.addAll(usageBytecodeFields(resolved.classes(), binaryName, query.member(), visibility));
+        }
     }
 
     private static Set<UsageKey> usageKeys(List<ClassModel> classes, String binaryName, String member,
@@ -734,7 +752,7 @@ final class UsageSearch {
             List<byte[]> bytecodeOwnerNeedles,
             List<String> descriptorNeedles,
             List<String> genericSignatureNeedles,
-            byte[] memberNeedle,
+            List<byte[]> memberNeedles,
             boolean constructorTarget) {
         boolean matchesDirectly(Element element) {
             var key = usageKey(element);
@@ -783,7 +801,7 @@ final class UsageSearch {
                     return true;
                 }
             }
-            if (!constructorTarget && (memberNeedle == null || !contains(classFile, length, memberNeedle))) {
+            if (!constructorTarget && memberNeedles.stream().noneMatch(needle -> contains(classFile, length, needle))) {
                 return false;
             }
             for (var needle : bytecodeOwnerNeedles) {

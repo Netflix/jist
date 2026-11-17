@@ -659,12 +659,14 @@ class UsageQueryTest {
     }
 
     @Test
-    void usageSymbolsMustBeFullyQualified() {
+    void ownerSuffixSelectsUsagesAmongTypesWithTheSameSimpleName() {
+        var exact = run("--usages", "--class-path", CLASSES.toString(), "com.example.Target.run");
         var result = run("--usages", "--class-path", CLASSES.toString(), "Target.run");
 
-        assertEquals(1, result.exitCode());
-        assertTrue(result.error().contains("Class not found: Target.run"),
-                result.error());
+        assertEquals(0, exact.exitCode(), exact.error());
+        assertTrue(exact.output().contains("com.example.Consumer"), exact.output());
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals(exact.output(), result.output());
     }
 
     @Test

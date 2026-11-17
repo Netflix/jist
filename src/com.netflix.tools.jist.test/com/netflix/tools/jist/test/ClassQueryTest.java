@@ -1697,12 +1697,14 @@ class ClassQueryTest {
     }
 
     @Test
-    void simpleRuntimeClassNameIsNotResolved() {
+    void runtimeMemberSuffixResolvesTheQualifiedDeclaration() {
+        var exact = run("java.lang.String.isEmpty");
         var result = run("String.isEmpty");
 
-        assertEquals(1, result.exitCode());
-        assertTrue(result.error().contains("no symbol prefix matches"),
-                result.error());
+        assertEquals(0, exact.exitCode(), exact.error());
+        assertTrue(exact.output().contains("public boolean isEmpty()"), exact.output());
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals(exact.output(), result.output());
     }
 
     @Test

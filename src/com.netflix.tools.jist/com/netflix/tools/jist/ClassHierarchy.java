@@ -35,8 +35,7 @@ final class ClassHierarchy implements Closeable {
     private final Set<String> sourceTypes = new HashSet<>();
     private final Set<Path> sourceFiles = new HashSet<>();
     private final URLClassLoader classPath;
-    private FileSystem system;
-    private boolean closeSystem;
+    private Path system;
     private Map<String, Set<String>> systemPackages;
 
     private ClassHierarchy(Options options, SearchEnvironment environment) throws IOException, ToolException {
@@ -73,24 +72,12 @@ final class ClassHierarchy implements Closeable {
             var modules = environment.modules()
                     .systemPackages()
                     .keySet();
-            if (!"none".equals(options.system())
-                    && !modules.isEmpty()
-                    && (options.system() == null || Files.isRegularFile(Path.of(options.system()).resolve("lib/modules")))) {
-                if (options.system() == null) {
-                    try {
-                        hierarchy.system = FileSystems.getFileSystem(URI.create("jrt:/"));
-                    } catch (FileSystemNotFoundException _) {
-                        hierarchy.system = FileSystems.newFileSystem(URI.create("jrt:/"), Map.of());
-                        hierarchy.closeSystem = true;
-                    }
-                } else {
-                    hierarchy.system = FileSystems.newFileSystem(URI.create("jrt:/"), Map.of("java.home", options.system()));
-                    hierarchy.closeSystem = true;
-                }
-                if (!options.excludeSystemModules()) {
+            if (!modules.isEmpty()) {
+                hierarchy.system = environment.systemModules();
+                if (hierarchy.system != null && !options.excludeSystemModules()) {
                     for (var module : modules) {
-                        var name = module;
-                        inputs.add(new Input(hierarchy.system.getPath("/modules", name), resource -> environment.includesSystemResource(name, resource)));
+                        inputs.add(new Input(hierarchy.system.resolve(module),
+                                resource -> environment.includesSystemResource(module, resource)));
                     }
                 }
             }
@@ -104,11 +91,7 @@ final class ClassHierarchy implements Closeable {
 
     @Override
     public void close() throws IOException {
-        try (sources; classPath) {
-            if (closeSystem) {
-                system.close();
-            }
-        }
+        try (sources; classPath) {}
     }
 
     Set<String> subtypes(Set<String> targets, boolean direct) throws IOException, ToolException {
@@ -341,7 +324,7 @@ final class ClassHierarchy implements Closeable {
                         || !environment.includesSystemResource(module.getKey(), candidate)) {
                     continue;
                 }
-                var file = system.getPath("/modules", module.getKey(), candidate);
+                var file = system.resolve(module.getKey()).resolve(candidate);
                 if (Files.isRegularFile(file)) {
                     return CLASS_FILE.parse(Files.readAllBytes(file));
                 }

@@ -302,7 +302,7 @@ class HelpTest {
 
                 Relationships:
                   --referenced-types <target>             List types referenced by a class or source file
-                  --usages                                Find semantic usages of an exact symbol
+                  --usages                                Find semantic usages of a type or member
                   --subtypes <type>                       Find extending or implementing types; repeatable
                   --supertypes <type>                     Find parent types; repeatable
                   --overrides <member>                    Find overriding method declarations; repeatable

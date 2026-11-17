@@ -32,38 +32,20 @@ final class ReferencedTypes {
     static void list(Options options, SearchEnvironment environment, PrintWriter out) throws IOException, ToolException {
         var target = options.referencedTypes();
         var results = new LinkedHashMap<String, SymbolKind>();
-        if (DeclarationSearch.simpleNameTarget(target)) {
+        if (DeclarationSearch.simpleNameTarget(target)
+                || !target.endsWith(".java") && !target.endsWith(".class") && !environment.classTargetExists(target)) {
             var selected = options.targetSearch(target, Set.of(SymbolKind.TYPE));
-            var resolution = new SearchEnvironment(selected);
-            var targets = new TypeTargets();
-            new DeclarationSearch(resolution).listClasses(selected, targets);
-            if (targets.names.isEmpty()) throw ToolException.notFound("Class or Java source not found: " + target);
-            for (var name : targets.names) {
-                collect(options, resolution, name, results);
+            var resolution = environment.targetSearch(target, selected.kinds());
+            var targets = SymbolTargets.resolve(selected, resolution, target, Set.of(SymbolKind.TYPE));
+            if (targets.isEmpty()) throw ToolException.notFound("Class or Java source not found: " + target);
+            for (var selection : targets) {
+                collect(options, resolution, selection.path(), results);
             }
         } else {
             collect(options, environment, target, results);
         }
         results.forEach((name, kind) -> out.println(kind.optionName() + " " + name));
         out.flush();
-    }
-
-    private static final class TypeTargets extends PrintWriter implements Output.SymbolOutput {
-        private final Set<String> names = new LinkedHashSet<>();
-
-        TypeTargets() {
-            super(Writer.nullWriter());
-        }
-
-        @Override
-        public boolean listOnly() {
-            return true;
-        }
-
-        @Override
-        public void symbol(SymbolKind kind, String name, String location) {
-            names.add(name);
-        }
     }
 
     private static void collect(Options options, SearchEnvironment environment, String target,

@@ -84,6 +84,41 @@ class CompiledInputQueryTest {
     }
 
     @Test
+    void explodedInputsRetainResourcesAcrossRootSpellings(@TempDir Path directory) throws Exception {
+        var root = Files.createDirectories(directory.resolve("class files/ordered")).getParent();
+        Files.write(root.resolve("ordered/Caller.class"), caller("ordered.Caller", "systemUTC", ""));
+        var relative = Path.of("").toAbsolutePath().relativize(root);
+        for (var input : List.of(root, relative, root.resolve("."), relative.resolve("."))) {
+            for (var query : List.of("--callers", "--usages")) {
+                var rows = query(List.of(input), query);
+                assertEquals(1, rows.size());
+                assertTrue(rows.getFirst().get("text").asString().contains("ordered.Caller.clock"));
+                assertEquals(root.resolve("ordered/Caller.class").toString(),
+                        rows.getFirst().get("origin").get("location").asString());
+            }
+        }
+    }
+
+    @Test
+    void embeddedQueriesKeepImplicitAndExplicitSystemImagesUsable() throws Exception {
+        var tool = new Jist();
+        for (var explicit : List.of(false, true)) {
+            var arguments = new ArrayList<>(List.of("--source", "none", "--supertypes", "java.util.ArrayList"));
+            if (explicit) arguments.addAll(List.of("--system", System.getProperty("java.home")));
+            for (int iteration = 0; iteration < 2; iteration++) {
+                var output = new StringWriter();
+                var error = new StringWriter();
+                int status = tool.run(new PrintWriter(output), new PrintWriter(error), arguments.toArray(String[]::new));
+                assertEquals(0, status, error.toString());
+                assertEquals("", error.toString());
+                assertTrue(output.toString().contains("java.util.AbstractList"), output.toString());
+            }
+        }
+        var system = java.nio.file.FileSystems.getFileSystem(java.net.URI.create("jrt:/"));
+        assertTrue(Files.size(system.getPath("/modules/java.base/java/lang/Object.class")) > 0);
+    }
+
+    @Test
     void declarationScansPreserveMemberOrderAndVisibilityAcrossArchives(@TempDir Path directory) throws Exception {
         var roots = new ArrayList<String>();
         var visible = new ArrayList<String>();

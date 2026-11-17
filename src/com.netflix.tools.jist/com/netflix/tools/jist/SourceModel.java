@@ -60,6 +60,12 @@ public final class SourceModel {
         return fromCharacters(content.toString().toCharArray());
     }
 
+    static boolean mayContainName(CharSequence content, String name) {
+        var text = content.toString();
+        // Escaped identifiers need javac even when their decoded name is absent from the source text.
+        return text.contains(name) || text.contains("\\u");
+    }
+
     private static SourceModel fromCharacters(char[] source) {
         int lineCount = 1;
         for (var ch : source) {

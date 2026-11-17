@@ -22,7 +22,7 @@ Capabilities include:
 - Find caller and callee edges for matching executables or every executable declared by a matching type
 - Produce terminal-friendly, stable line-oriented, or streaming JSON output
 
-Searches use exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. List mode also accepts `*` wildcards for declaration-name matching. Relationship options accept a delimiter-bounded type or member suffix, such as `String.repeat`. There is no ranking, typo correction, or implicit resolution of other partially qualified names.
+Searches use exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. List mode also accepts `*` wildcards for declaration-name matching. Usage and relationship queries also accept delimiter-bounded type or member suffixes, such as `String.repeat`. Referenced-type queries accept type suffixes, such as `Map.Entry`. Source descriptions accept those suffixes when no qualified prefix matches. Multiple matching subjects form a union. There is no ranking or typo correction.
 
 > [!IMPORTANT]
 > This tool is currently in preview. Please share feedback for any of the tools in [Discussions](https://github.com/Netflix/ja/discussions).

@@ -78,7 +78,7 @@ final class CallSearch implements Closeable {
     private void select(List<String> targets, Set<String> selected) throws IOException, ToolException {
         for (var target : targets) {
             boolean found = false;
-            for (var selection : ExecutableTargets.resolve(options, environment, target)) {
+            for (var selection : SymbolTargets.resolve(options, environment, target, Set.of(SymbolKind.TYPE, SymbolKind.METHOD), true)) {
                 found |= select(selection, selected);
             }
             if (!found) {

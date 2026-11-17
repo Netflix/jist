@@ -90,7 +90,9 @@ public final class Jist implements ToolProvider, OptionChecker {
                 if (opts.source() != null && opts.source() != SourceScope.NONE) {
                     throw new ToolException(1, "--referenced-types lists types and accepts only --source none");
                 }
-                ReferencedTypes.list(opts, new SearchEnvironment(opts), out);
+                try (var environment = new SearchEnvironment(opts)) {
+                    ReferencedTypes.list(opts, environment, out);
+                }
                 return 0;
             }
             if (opts.relationships() && (opts.target() != null || opts.usages())) {
@@ -108,97 +110,99 @@ public final class Jist implements ToolProvider, OptionChecker {
                                 ? null
                                 : opts.source() != null ? opts.source() : SourceScope.SIGNATURE);
             }
-            var environment = new SearchEnvironment(opts);
-            out = formattedOutput(opts, out, err, terminal, environment.modules().systemVersions());
-            if (opts.relationships()) {
-                try (var relationships = opts.hierarchy() ? RelationshipSearch.open(opts, environment) : null;
-                        var calls = opts.calls() ? CallSearch.open(opts, environment) : null) {
-                    var kinds = opts.kinds().isEmpty() ? EnumSet.of(SymbolKind.TYPE, SymbolKind.METHOD) : EnumSet.copyOf(opts.kinds());
-                    kinds.removeAll(EnumSet.of(SymbolKind.MODULE, SymbolKind.PACKAGE, SymbolKind.FIELD));
-                    if (relationships != null && !kinds.isEmpty()) {
-                        var selected = opts.withKinds(kinds);
-                        var declarations = new DeclarationSearch(environment, relationships);
-                        if (relationships.hasOnlyExactSupertypes()) {
-                            for (var name : relationships.exactSupertypes()) {
-                                declarations.printSymbolContext(selected.withTargetAndKinds(name, kinds),
-                                        new SymbolSelection(name, null), out, err);
+            try (var environment = new SearchEnvironment(opts)) {
+                out = formattedOutput(opts, out, err, terminal, environment.modules().systemVersions());
+                if (opts.relationships()) {
+                    try (var relationships = opts.hierarchy() ? RelationshipSearch.open(opts, environment) : null;
+                            var calls = opts.calls() ? CallSearch.open(opts, environment) : null) {
+                        var kinds = opts.kinds().isEmpty() ? EnumSet.of(SymbolKind.TYPE, SymbolKind.METHOD) : EnumSet.copyOf(opts.kinds());
+                        kinds.removeAll(EnumSet.of(SymbolKind.MODULE, SymbolKind.PACKAGE, SymbolKind.FIELD));
+                        if (relationships != null && !kinds.isEmpty()) {
+                            var selected = opts.withKinds(kinds);
+                            var declarations = new DeclarationSearch(environment, relationships);
+                            if (relationships.hasOnlyExactSupertypes()) {
+                                for (var name : relationships.exactSupertypes()) {
+                                    declarations.printSymbolContext(selected.withTargetAndKinds(name, kinds),
+                                            new SymbolSelection(name, null), out, err);
+                                }
+                            } else {
+                                declarations.listSourceContexts(selected, out);
                             }
-                        } else {
-                            declarations.listSourceContexts(selected, out);
+                        }
+                        if (calls != null && (opts.kinds().isEmpty() || opts.listsMethods())) {
+                            calls.search(out);
                         }
                     }
-                    if (calls != null && (opts.kinds().isEmpty() || opts.listsMethods())) {
-                        calls.search(out);
-                    }
-                }
-                return 0;
-            }
-            var declarations = new DeclarationSearch(environment);
-            if (opts.target() != null) {
-                if (opts.usages()) {
-                    if (simpleNameTarget(opts.target())) {
-                        throw new ToolException(1, "--usages requires an exact qualified symbol");
-                    }
-                    if (!opts.kinds().isEmpty()) {
-                        throw new ToolException(1, "--usages and --kind are mutually exclusive");
-                    }
-                    if (opts.source() == SourceScope.SIGNATURE
-                            || opts.source() == SourceScope.DOC
-                            || opts.source() == SourceScope.SYMBOL
-                            || opts.source() == SourceScope.NONE) {
-                        throw new ToolException(1, "--usages accepts source body, definition, type, or unit");
-                    }
-                    new UsageSearch(environment).listUsages(opts, out, err);
                     return 0;
                 }
-                if (simpleNameTarget(opts.target())) {
-                    var listing = opts.kinds().isEmpty() ? opts.withKinds(defaultKinds()) : opts;
-                    if (opts.listOnly() && opts.target().indexOf('*') >= 0) {
-                        declarations.searchSymbols(listing, new SymbolSelection(opts.target(), null), out);
-                    } else if (opts.source() != null) {
-                        declarations.searchSourceContexts(listing, out);
-                    } else {
-                        declarations.searchSymbols(listing, new SymbolSelection(opts.target(), null), out);
-                    }
-                    return 0;
-                }
-                if (opts.source() != null) {
-                    var sourceQuery = environment.resolveSymbolSelection(opts.target());
-                    var file = Path.of(sourceQuery.path());
-                    if (sourceQuery.member() == null && !Files.isRegularFile(file) && !environment.classTargetExists(sourceQuery.path())) {
-                        declarations.searchSourceContexts(opts, out);
+                var declarations = new DeclarationSearch(environment);
+                if (opts.target() != null) {
+                    if (opts.usages()) {
+                        if (!opts.kinds().isEmpty()) {
+                            throw new ToolException(1, "--usages and --kind are mutually exclusive");
+                        }
+                        if (opts.source() == SourceScope.SIGNATURE
+                                || opts.source() == SourceScope.DOC
+                                || opts.source() == SourceScope.SYMBOL
+                                || opts.source() == SourceScope.NONE) {
+                            throw new ToolException(1, "--usages accepts source body, definition, type, or unit");
+                        }
+                        new UsageSearch(environment).listUsages(opts, out, err);
                         return 0;
                     }
-                }
-                if (!opts.kinds().isEmpty()) {
+                    if (simpleNameTarget(opts.target())) {
+                        var listing = opts.kinds().isEmpty() ? opts.withKinds(defaultKinds()) : opts;
+                        if (opts.listOnly() && opts.target().indexOf('*') >= 0) {
+                            declarations.searchSymbols(listing, new SymbolSelection(opts.target(), null), out);
+                        } else if (opts.source() != null) {
+                            declarations.searchSourceContexts(listing, out, err);
+                        } else {
+                            declarations.searchSymbols(listing, new SymbolSelection(opts.target(), null), out);
+                        }
+                        return 0;
+                    }
                     if (opts.source() != null) {
-                        declarations.printSymbolContext(opts, environment.resolveSymbolSelection(opts.target()), out, err);
+                        var sourceQuery = environment.resolveSymbolSelection(opts.target());
+                        var file = Path.of(sourceQuery.path());
+                        if (opts.listsOnlyTypes() && sourceQuery.member() != null && !Files.isRegularFile(file)) {
+                            declarations.printResolvedSymbolContexts(opts, out, err);
+                            return 0;
+                        }
+                        if (sourceQuery.member() == null && !Files.isRegularFile(file) && !environment.classTargetExists(sourceQuery.path())) {
+                            declarations.searchSourceContexts(opts, out, err);
+                            return 0;
+                        }
+                    }
+                    if (!opts.kinds().isEmpty()) {
+                        if (opts.source() != null) {
+                            declarations.printSymbolContext(opts, environment.resolveSymbolSelection(opts.target()), out, err);
+                        } else {
+                            declarations.listClasses(opts, out);
+                        }
+                        return 0;
+                    }
+                    var query = environment.resolveSymbolSelection(opts.target());
+                    if (opts.source() != null) {
+                        declarations.printSymbolContext(opts, query, out, err);
+                    } else if (query.path().endsWith(JAVA_EXT) || query.path().endsWith(CLASS_EXT)) {
+                        declarations.searchFileSymbols(opts, query, out);
                     } else {
-                        declarations.listClasses(opts, out);
+                        declarations.searchSymbols(opts, query, out);
                     }
                     return 0;
                 }
-                var query = environment.resolveSymbolSelection(opts.target());
-                if (opts.source() != null) {
-                    declarations.printSymbolContext(opts, query, out, err);
-                } else if (query.path().endsWith(JAVA_EXT) || query.path().endsWith(CLASS_EXT)) {
-                    declarations.searchFileSymbols(opts, query, out);
-                } else {
-                    declarations.searchSymbols(opts, query, out);
+                if (opts.usages()) {
+                    throw new ToolException(1, "--usages requires an exact symbol");
                 }
-                return 0;
-            }
-            if (opts.usages()) {
-                throw new ToolException(1, "--usages requires an exact symbol");
-            }
-            if (opts.source() != null) {
+                if (opts.source() != null) {
+                    var listing = opts.kinds().isEmpty() ? opts.withKinds(defaultKinds()) : opts;
+                    declarations.listSourceContexts(listing, out);
+                    return 0;
+                }
                 var listing = opts.kinds().isEmpty() ? opts.withKinds(defaultKinds()) : opts;
-                declarations.listSourceContexts(listing, out);
+                declarations.listClasses(listing, out);
                 return 0;
             }
-            var listing = opts.kinds().isEmpty() ? opts.withKinds(defaultKinds()) : opts;
-            declarations.listClasses(listing, out);
-            return 0;
         } catch (ToolException e) {
             if (jsonOutput != null) jsonOutput.failure(e.exitCode, e.kind, e.getMessage());
             err.println("Error: " + e.getMessage());

@@ -236,9 +236,15 @@ final class DeclarationSearch {
         out.flush();
     }
 
-    void searchSourceContexts(Options opts, PrintWriter out) throws IOException, ToolException {
+    void searchSourceContexts(Options opts, PrintWriter out, PrintWriter err) throws IOException, ToolException {
         var symbols = new CountingPrintWriter(out);
         listSourceContexts(opts, symbols);
+        if (symbols.count() == 0 && !simpleNameTarget(opts.target())) {
+            for (var selection : SymbolTargets.resolve(opts, environment, opts.target(), opts.kinds())) {
+                var target = selection.member() == null ? selection.path() : selection.path() + "." + selection.member();
+                printSymbolContext(opts.withTargetAndKinds(target, opts.kinds()), selection, symbols, err);
+            }
+        }
         if (symbols.count() == 0) {
             throw ToolException.notFound(
                     simpleNameTarget(opts.target()) ? "Symbol not found: " + opts.target() : "Class not found: " + opts.target() + "; no symbol prefix matches");
@@ -325,7 +331,9 @@ final class DeclarationSearch {
                 ? moduleName
                 : className.endsWith(".package-info") ? packageName(className) : className;
         if (symbol == null
-                || opts.target() != null && !matchesListedPrefix(opts, symbol) && !(simpleNameTarget(opts.target()) && (opts.listsMethods() || opts.listsFields()))) {
+                || opts.target() != null && !matchesListedPrefix(opts, symbol)
+                        && !(opts.listsPackages() && matchesListedPrefix(opts, resourcePackageName(resourceName)))
+                        && !(simpleNameTarget(opts.target()) && (opts.listsMethods() || opts.listsFields()))) {
             return false;
         }
         return visiblePackages == null || isVisibleModuleClass(resourceName, visiblePackages);
@@ -699,12 +707,6 @@ final class DeclarationSearch {
                             if (!structure.packageName().isEmpty()) {
                                 declaredPackages.add(structure.packageName());
                             }
-                            structure.classNames()
-                                     .stream()
-                                    .filter(name -> structure.kinds().get(name) != SymbolKind.MODULE)
-                                    .map(name -> structure.kinds().get(name) == SymbolKind.PACKAGE ? name : packageName(name))
-                                    .filter(name -> !name.isEmpty())
-                                    .forEach(declaredPackages::add);
                             for (var packageName : declaredPackages) {
                                 if (!emittedPackages.add(packageName) || !matchesListedPrefix(opts, packageName)) {
                                     continue;
@@ -1851,7 +1853,7 @@ final class DeclarationSearch {
             output.classOrigin(source.unitName(), source.classLocation());
         }
         var model = source.model();
-        if (relationships != null && opts.source() == SourceScope.NONE && source.classes().isEmpty()) {
+        if (opts.source() == SourceScope.NONE && source.classes().isEmpty()) {
             printSourceDeclarations(Path.of(source.sourceLocation()), opts, out,
                     matches.stream()
                            .map(ContextMatch::key)

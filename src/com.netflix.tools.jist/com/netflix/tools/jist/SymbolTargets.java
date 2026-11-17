@@ -16,29 +16,38 @@ package com.netflix.tools.jist;
 
 import module java.base;
 
-final class ExecutableTargets extends PrintWriter implements Output.SymbolOutput {
+final class SymbolTargets extends PrintWriter implements Output.SymbolOutput {
     private final String target;
     private final String ownerSuffix;
     private final String member;
+    private final boolean inheritedMembers;
     private final Set<SymbolSelection> values = new LinkedHashSet<>();
 
-    private ExecutableTargets(String target) {
+    private SymbolTargets(String target, boolean inheritedMembers) {
         super(Writer.nullWriter());
         this.target = target;
+        this.inheritedMembers = inheritedMembers;
         int separator = target.lastIndexOf('.');
         this.ownerSuffix = separator < 0 ? null : target.substring(0, separator);
         this.member = separator < 0 ? null : target.substring(separator + 1);
     }
 
-    static List<SymbolSelection> resolve(Options options, SearchEnvironment environment, String target)
-            throws IOException, ToolException {
+    static List<SymbolSelection> resolve(Options options, SearchEnvironment environment, String target,
+            Set<SymbolKind> kinds) throws IOException, ToolException {
+        return resolve(options, environment, target, kinds, false);
+    }
+
+    static List<SymbolSelection> resolve(Options options, SearchEnvironment environment, String target,
+            Set<SymbolKind> kinds, boolean inheritedMembers) throws IOException, ToolException {
         var selection = environment.resolveSymbolSelection(target);
-        if (selection.member() != null || environment.classTargetExists(selection.path())) {
+        if (!DeclarationSearch.simpleNameTarget(target)
+                && (selection.member() != null || environment.classTargetExists(selection.path()))) {
             return List.of(selection);
         }
-        var targets = new ExecutableTargets(target);
+        var targets = new SymbolTargets(target, inheritedMembers);
         var declarationTarget = DeclarationSearch.simpleNameTarget(target) ? target : null;
-        var targetOptions = options.targetSearch(declarationTarget, Set.of(SymbolKind.TYPE, SymbolKind.METHOD));
+        var targetOptions = options.targetSearch(declarationTarget,
+                kinds.isEmpty() ? DeclarationSearch.defaultKinds() : kinds);
         new DeclarationSearch(new SearchEnvironment(targetOptions)).listClasses(targetOptions, targets);
         return List.copyOf(targets.values);
     }
@@ -50,7 +59,7 @@ final class ExecutableTargets extends PrintWriter implements Output.SymbolOutput
 
     @Override
     public void symbol(SymbolKind kind, String name, String location) {
-        if (kind != SymbolKind.METHOD && !kind.isType()) {
+        if (kind != SymbolKind.METHOD && kind != SymbolKind.FIELD && !kind.isType()) {
             return;
         }
         int parameters = name.indexOf('(');
@@ -59,7 +68,9 @@ final class ExecutableTargets extends PrintWriter implements Output.SymbolOutput
             if (matches(qualifiedName, target)) {
                 values.add(new SymbolSelection(qualifiedName, null));
             }
-            if (ownerSuffix != null && matches(qualifiedName, ownerSuffix)) {
+            if (ownerSuffix != null
+                    && inheritedMembers
+                    && matches(qualifiedName, ownerSuffix)) {
                 values.add(new SymbolSelection(qualifiedName, member));
             }
             return;

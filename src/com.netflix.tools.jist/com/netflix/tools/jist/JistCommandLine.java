@@ -59,7 +59,7 @@ final class JistCommandLine {
             .description("Include symbols of this kind")
             .build();
     private final ToolOption referencedTypes = option("--referenced-types", "TYPE|SOURCE-OR-CLASS-FILE", "List types referenced by a class or source file");
-    private final ToolOption usages = flag("--usages", "Find semantic usages of an exact symbol");
+    private final ToolOption usages = flag("--usages", "Find semantic usages of a type or member");
     private final ToolOption subtypes = option("--subtypes", "TYPE", "Find extending or implementing types");
     private final ToolOption supertypes = option("--supertypes", "TYPE", "Find parent types");
     private final ToolOption overrides = option("--overrides", "MEMBER", "Find overriding method declarations");

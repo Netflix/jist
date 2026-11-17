@@ -136,9 +136,6 @@ public final class Jist implements ToolProvider, OptionChecker {
             var declarations = new DeclarationSearch(environment);
             if (opts.target() != null) {
                 if (opts.usages()) {
-                    if (simpleNameTarget(opts.target())) {
-                        throw new ToolException(1, "--usages requires an exact qualified symbol");
-                    }
                     if (!opts.kinds().isEmpty()) {
                         throw new ToolException(1, "--usages and --kind are mutually exclusive");
                     }
@@ -156,7 +153,7 @@ public final class Jist implements ToolProvider, OptionChecker {
                     if (opts.listOnly() && opts.target().indexOf('*') >= 0) {
                         declarations.searchSymbols(listing, new SymbolSelection(opts.target(), null), out);
                     } else if (opts.source() != null) {
-                        declarations.searchSourceContexts(listing, out);
+                        declarations.searchSourceContexts(listing, out, err);
                     } else {
                         declarations.searchSymbols(listing, new SymbolSelection(opts.target(), null), out);
                     }
@@ -166,7 +163,7 @@ public final class Jist implements ToolProvider, OptionChecker {
                     var sourceQuery = environment.resolveSymbolSelection(opts.target());
                     var file = Path.of(sourceQuery.path());
                     if (sourceQuery.member() == null && !Files.isRegularFile(file) && !environment.classTargetExists(sourceQuery.path())) {
-                        declarations.searchSourceContexts(opts, out);
+                        declarations.searchSourceContexts(opts, out, err);
                         return 0;
                     }
                 }

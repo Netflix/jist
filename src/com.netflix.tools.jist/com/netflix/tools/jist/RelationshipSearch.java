@@ -85,20 +85,16 @@ final class RelationshipSearch implements Closeable {
         var search = new RelationshipSearch(options, environment);
         try {
             for (var name : options.subtypes()) {
-                if (!environment.classTargetExists(name)) {
-                    throw ToolException.notFound("Type not found: " + name);
-                }
-                search.subtypes.add(name);
+                search.subtypes.addAll(typeNames(options, environment, name));
             }
             for (var name : options.supertypes()) {
-                if (!environment.classTargetExists(name)) {
-                    throw ToolException.notFound("Type not found: " + name);
+                for (var type : typeNames(options, environment, name)) {
+                    search.parents(search.analysis().resolveType(type), search.supertypes, !options.direct());
                 }
-                search.parents(search.analysis().resolveType(name), search.supertypes, !options.direct());
             }
             for (var name : options.overrides()) {
                 boolean found = false;
-                for (var selection : ExecutableTargets.resolve(options, environment, name)) {
+                for (var selection : SymbolTargets.resolve(options, environment, name, Set.of(SymbolKind.TYPE, SymbolKind.METHOD), true)) {
                     if (selection.member() == null) {
                         continue;
                     }
@@ -145,6 +141,18 @@ final class RelationshipSearch implements Closeable {
             search.close();
             throw e;
         }
+    }
+
+    private static List<String> typeNames(Options options, SearchEnvironment environment, String name)
+            throws IOException, ToolException {
+        var names = SymbolTargets.resolve(options, environment, name, Set.of(SymbolKind.TYPE)).stream()
+                .filter(selection -> selection.member() == null)
+                .map(SymbolSelection::path)
+                .toList();
+        if (names.isEmpty()) {
+            throw ToolException.notFound("Type not found: " + name);
+        }
+        return names;
     }
 
     boolean hasOnlyExactSupertypes() {

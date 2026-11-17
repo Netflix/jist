@@ -91,6 +91,10 @@ public record Options(
     }
 
     boolean listsOnlyTypes() {
+        return listsOnlyTypes(kinds);
+    }
+
+    static boolean listsOnlyTypes(Set<SymbolKind> kinds) {
         return !kinds.isEmpty() && kinds.stream().allMatch(SymbolKind::isType);
     }
 

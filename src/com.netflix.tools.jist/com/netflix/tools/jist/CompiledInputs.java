@@ -188,35 +188,16 @@ final class CompiledInputs {
             }
         }
         var modules = environment.modules().systemPackages().keySet();
-        if (options.excludeSystemModules() || "none".equals(options.system()) || modules.isEmpty()) {
+        if (options.excludeSystemModules() || modules.isEmpty()) {
             return;
         }
-        if (options.system() != null && !Files.isRegularFile(Path.of(options.system()).resolve("lib/modules"))) {
+        var system = environment.systemModules();
+        if (system == null) {
             return;
         }
-        FileSystem system;
-        boolean close;
-        if (options.system() == null) {
-            try {
-                system = FileSystems.getFileSystem(URI.create("jrt:/"));
-                close = false;
-            } catch (FileSystemNotFoundException _) {
-                system = FileSystems.newFileSystem(URI.create("jrt:/"), Map.of());
-                close = true;
-            }
-        } else {
-            system = FileSystems.newFileSystem(URI.create("jrt:/"), Map.of("java.home", options.system()));
-            close = true;
-        }
-        try {
-            for (var module : modules) {
-                scanEntry(system.getPath("/modules", module), reader, consumer,
-                        resource -> environment.includesSystemResource(module, resource), executor);
-            }
-        } finally {
-            if (close) {
-                system.close();
-            }
+        for (var module : modules) {
+            scanEntry(system.resolve(module), reader, consumer,
+                    resource -> environment.includesSystemResource(module, resource), executor);
         }
     }
 
@@ -256,14 +237,10 @@ final class CompiledInputs {
             throws IOException, ToolException {
         try (var root = Root.open(path);
              var reads = new OrderedReads<ReadClass>(executor, value -> consumer.accept(value.bytes(), value.input()))) {
-            root.forEach(false, input -> {
-                if (filter.test(input.resource())) {
-                    reads.submit(() -> {
-                        var bytes = input.read(reader);
-                        return bytes == null ? null : new ReadClass(bytes, input);
-                    });
-                }
-            });
+            root.forEach(false, filter, input -> reads.submit(() -> {
+                var bytes = input.read(reader);
+                return bytes == null ? null : new ReadClass(bytes, input);
+            }));
             reads.finish();
         }
     }
@@ -294,36 +271,31 @@ final class CompiledInputs {
     static final class Root implements AutoCloseable {
         private final Path path;
         private final JarFile jar;
-        private final FileSystem archive;
+        private FileSystem archive;
         private final String origin;
 
-        private Root(Path path, JarFile jar, FileSystem archive) {
+        private Root(Path path, JarFile jar) {
             this.path = path;
             this.jar = jar;
-            this.archive = archive;
             this.origin = jar == null ? null : "jar:" + path.toAbsolutePath().normalize().toUri() + "!/";
         }
 
         static Root open(Path path) throws IOException {
             if (!Files.isRegularFile(path)) {
-                return new Root(path, null, null);
+                return new Root(path, null);
             }
-            var jar = ClassPaths.openArchive(path, false);
-            try {
-                // ZipFile serializes payload reads; zipfs uses positional FileChannel reads.
-                return new Root(path, jar, FileSystems.newFileSystem(path));
-            } catch (IOException | RuntimeException | Error failure) {
-                try (jar) {
-                    throw failure;
-                }
-            }
+            return new Root(path, ClassPaths.openArchive(path, false));
         }
 
         boolean isArchive() {
             return jar != null;
         }
 
-        private ClassInput input(JarEntry entry) {
+        private ClassInput input(JarEntry entry) throws IOException {
+            if (archive == null) {
+                // Only selected entries need zipfs paths for parallel positional reads.
+                archive = FileSystems.newFileSystem(path);
+            }
             return new ClassInput(archive.getPath(entry.getRealName()), entry.getName(), entry.getSize(),
                     origin, entry.getRealName());
         }
@@ -338,24 +310,59 @@ final class CompiledInputs {
         }
 
         void forEach(boolean metadataFirst, InputConsumer consumer) throws IOException, ToolException {
+            forEach(metadataFirst, resource -> true, consumer);
+        }
+
+        void forEach(boolean metadataFirst, Filter filter, InputConsumer consumer) throws IOException, ToolException {
             if (jar != null) {
                 var entries = jar.isMultiRelease() ? jar.versionedStream().iterator() : jar.entries().asIterator();
                 while (entries.hasNext()) {
                     var entry = entries.next();
-                    if (!entry.isDirectory() && entry.getName().endsWith(".class")) {
+                    if (!entry.isDirectory() && entry.getName().endsWith(".class") && filter.test(entry.getName())) {
                         consumer.accept(input(entry));
                     }
                 }
             } else if (Files.isDirectory(path)) {
-                walkFiles(path, ".class", metadataFirst, file -> consumer.accept(new ClassInput(file,
-                        path.relativize(file).toString().replace(File.separatorChar, '/'), -1, null, null)));
+                forEachDirectory(path, metadataFirst, filter, consumer);
             }
+        }
+
+        void forEachPackage(Collection<String> packages, Filter filter, InputConsumer consumer) throws IOException, ToolException {
+            for (var name : packages.stream().sorted().toList()) {
+                var prefix = name.isEmpty() ? "" : name.replace('.', '/') + "/";
+                var directory = path.resolve(prefix);
+                if (!Files.isDirectory(directory)) {
+                    continue;
+                }
+                try (var files = Files.newDirectoryStream(directory)) {
+                    for (var file : files) {
+                        var resource = prefix + file.getFileName();
+                        if (resource.endsWith(".class") && filter.test(resource)) {
+                            var input = find(resource);
+                            if (input != null) consumer.accept(input);
+                        }
+                    }
+                }
+            }
+        }
+
+        private void forEachDirectory(Path directory, boolean metadataFirst, Filter filter, InputConsumer consumer)
+                throws IOException, ToolException {
+            int firstName = path.toString().isEmpty() ? 0 : path.getNameCount();
+            walkFiles(directory, ".class", metadataFirst, file -> {
+                // The walker already guarantees descent; relativize needlessly compares every parent segment.
+                var resource = file.subpath(firstName, file.getNameCount()).toString().replace(File.separatorChar, '/');
+                if (filter.test(resource)) {
+                    consumer.accept(new ClassInput(file, resource, -1, null, null));
+                }
+            });
         }
 
         @Override
         public void close() throws IOException {
             if (jar != null) {
-                try (jar; archive) {
+                var fileSystem = archive;
+                try (jar; fileSystem) {
                     // Readers must finish or be cancelled and joined before closing their root.
                 }
             }

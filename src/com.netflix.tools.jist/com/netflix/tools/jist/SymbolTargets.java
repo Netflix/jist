@@ -39,16 +39,18 @@ final class SymbolTargets extends PrintWriter implements Output.SymbolOutput {
 
     static List<SymbolSelection> resolve(Options options, SearchEnvironment environment, String target,
             Set<SymbolKind> kinds, boolean inheritedMembers) throws IOException, ToolException {
-        var selection = environment.resolveSymbolSelection(target);
+        var selection = environment.resolveSymbolSelection(target, !Options.listsOnlyTypes(kinds));
         if (!DeclarationSearch.simpleNameTarget(target)
                 && (selection.member() != null || environment.classTargetExists(selection.path()))) {
             return List.of(selection);
         }
         var targets = new SymbolTargets(target, inheritedMembers);
-        var declarationTarget = DeclarationSearch.simpleNameTarget(target) ? target : null;
+        var declarationTarget = inheritedMembers && !DeclarationSearch.simpleNameTarget(target)
+                ? null : target.substring(target.lastIndexOf('.') + 1);
         var targetOptions = options.targetSearch(declarationTarget,
-                kinds.isEmpty() ? DeclarationSearch.defaultKinds() : kinds);
-        new DeclarationSearch(new SearchEnvironment(targetOptions)).listClasses(targetOptions, targets);
+                kinds.isEmpty() ? EnumSet.of(SymbolKind.TYPE, SymbolKind.METHOD, SymbolKind.FIELD) : kinds);
+        new DeclarationSearch(environment.targetSearch(declarationTarget, targetOptions.kinds()))
+                .listClasses(targetOptions, targets, targets::mayMatchClassResource);
         return List.copyOf(targets.values);
     }
 
@@ -86,9 +88,31 @@ final class SymbolTargets extends PrintWriter implements Output.SymbolOutput {
         }
     }
 
+    private boolean mayMatchClassResource(String resource) {
+        int end = resource.length() - ".class".length();
+        return ownerSuffix == null || matchesResourceSuffix(resource, end, target) || matchesResourceSuffix(resource, end, ownerSuffix);
+    }
+
     private static boolean matches(String name, String target) {
-        return DeclarationSearch.simpleNameTarget(target)
-                ? UsageSearch.terminalName(name).equals(target)
-                : name.equals(target) || name.endsWith("." + target);
+        return name.equals(target) || name.endsWith("." + target);
+    }
+
+    // Resource separators encode nesting; symbol names can also contain literal dollar signs.
+    private static boolean matchesResourceSuffix(String name, int end, String target) {
+        int start = end - target.length();
+        if (start < 0 || start > 0 && !separator(name.charAt(start - 1))) {
+            return false;
+        }
+        for (int i = 0; i < target.length(); i++) {
+            char actual = name.charAt(start + i);
+            if ((separator(actual) ? '.' : actual) != target.charAt(i)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean separator(char value) {
+        return value == '.' || value == '/' || value == '$';
     }
 }

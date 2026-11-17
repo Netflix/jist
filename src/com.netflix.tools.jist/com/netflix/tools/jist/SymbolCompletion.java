@@ -42,7 +42,9 @@ final class SymbolCompletion {
                     : options.kinds().isEmpty() ? defaultKinds() : options.kinds();
             var selected = options.withSource(null).withTargetAndKinds(parent(request.current()), kinds);
             var output = new CompletionOutput(request.current());
-            new DeclarationSearch(new SearchEnvironment(selected)).listClasses(selected, output);
+            try (var environment = new SearchEnvironment(selected)) {
+                new DeclarationSearch(environment).listClasses(selected, output);
+            }
             return output.completions();
         } catch (IOException | ToolException _) {
             return List.of();

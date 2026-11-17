@@ -35,7 +35,7 @@ final class ReferencedTypes {
         if (DeclarationSearch.simpleNameTarget(target)
                 || !target.endsWith(".java") && !target.endsWith(".class") && !environment.classTargetExists(target)) {
             var selected = options.targetSearch(target, Set.of(SymbolKind.TYPE));
-            var resolution = new SearchEnvironment(selected);
+            var resolution = environment.targetSearch(target, selected.kinds());
             var targets = SymbolTargets.resolve(selected, resolution, target, Set.of(SymbolKind.TYPE));
             if (targets.isEmpty()) throw ToolException.notFound("Class or Java source not found: " + target);
             for (var selection : targets) {

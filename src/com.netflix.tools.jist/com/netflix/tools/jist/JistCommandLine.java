@@ -16,6 +16,8 @@ package com.netflix.tools.jist;
 
 import module java.base;
 
+import java.util.regex.Pattern;
+
 import com.netflix.tools.jist.CommandLine.Cardinality;
 import com.netflix.tools.jist.CommandLine.Completion;
 import com.netflix.tools.jist.CommandLine.CompletionRequest;
@@ -58,6 +60,8 @@ final class JistCommandLine {
                     "record", "annotation", "method", "field")
             .description("Include symbols of this kind")
             .build();
+    private final ToolOption expression = option("--regexp", "EXPRESSION", "Search declaration names with a regular expression; repeatable", "-e");
+    private final ToolOption ignoreCase = flag("--ignore-case", "Ignore case when matching declaration names", "-i");
     private final ToolOption referencedTypes = option("--referenced-types", "TYPE|SOURCE-OR-CLASS-FILE", "List types referenced by a class or source file");
     private final ToolOption usages = flag("--usages", "Find semantic usages of a type or member");
     private final ToolOption subtypes = option("--subtypes", "TYPE", "Find extending or implementing types");
@@ -117,6 +121,8 @@ final class JistCommandLine {
                     enablePreview,
                     visibility,
                     kind,
+                    expression,
+                    ignoreCase,
                     referencedTypes,
                     usages,
                     subtypes,
@@ -272,6 +278,11 @@ final class JistCommandLine {
                 parsed.values(patchModule),
                 parsed.values(moduleSourcePath),
                 target,
+                parsed.values(expression).stream()
+                        .map(value -> Pattern.compile(value, parsed.contains(ignoreCase)
+                                ? Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE : 0))
+                        .toList(),
+                parsed.contains(ignoreCase),
                 last(parsed, system),
                 parsed.contains(excludeApplicationClasses),
                 parsed.contains(excludeSystemModules),

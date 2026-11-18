@@ -17,6 +17,7 @@ package com.netflix.tools.jist;
 import module java.base;
 
 import java.lang.classfile.ClassModel;
+import java.util.regex.Pattern;
 
 import com.sun.source.tree.ClassTree;
 
@@ -28,6 +29,8 @@ public record Options(
         List<String> patchModules,
         List<String> moduleSourcePaths,
         String target,
+        List<Pattern> expressions,
+        boolean ignoreCase,
         String system,
         boolean excludeApplicationClasses,
         boolean excludeSystemModules,
@@ -134,6 +137,8 @@ public record Options(
                 patchModules,
                 moduleSourcePaths,
                 selectedTarget,
+                List.of(),
+                false,
                 system,
                 false,
                 false,
@@ -174,6 +179,8 @@ public record Options(
                 patchModules,
                 moduleSourcePaths,
                 target,
+                expressions,
+                ignoreCase,
                 system,
                 excludeApplicationClasses,
                 excludeSystemModules,
@@ -214,6 +221,8 @@ public record Options(
                 patchModules,
                 moduleSourcePaths,
                 selectedTarget,
+                expressions,
+                ignoreCase,
                 system,
                 excludeApplicationClasses,
                 excludeSystemModules,
@@ -292,6 +301,9 @@ public record Options(
                                                             private, or all
 
                 Search:
+                  -e, --regexp <expression>               Search declaration simple names by Java regular expression
+                                                            (unanchored; repeatable expressions form a union)
+                  -i, --ignore-case                      Ignore case when matching declaration names
                   --exclude-path <path>                   Exclude input paths from searches, not resolution
                                                             (path-separator-delimited, as with --class-path)
                   -k, --kind <kind>                       Include symbols of this kind; repeatable

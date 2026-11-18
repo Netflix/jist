@@ -22,7 +22,11 @@ Capabilities include:
 - Find caller and callee edges for matching executables or every executable declared by a matching type
 - Produce terminal-friendly, stable line-oriented, or streaming JSON output
 
-Searches use exact names rather than fuzzy matches. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. List mode also accepts `*` wildcards for declaration-name matching. Usage and relationship queries also accept delimiter-bounded type or member suffixes, such as `String.repeat`. Referenced-type queries accept type suffixes, such as `Map.Entry`. Source descriptions accept those suffixes when no qualified prefix matches. Multiple matching subjects form a union. There is no ranking or typo correction.
+Positional names are literal Java names, not regular expressions. A simple name matches that complete terminal name wherever it is visible. A qualified name selects that exact delimiter-bounded namespace and the symbols beneath it. For declaration discovery, `-e` / `--regexp` searches simple names with a Java regular expression. Expressions match anywhere in the name unless anchored with `^` or `$`; repeated expressions form a union. `-i` / `--ignore-case` makes declaration-name matching case-insensitive without changing the names or identities in the results. List mode also accepts `*` wildcards.
+
+Combine a positional name with `-e` to search declarations within that owner or namespace. Expressions match each declaration's own simple name, not its owner, parameter types, documentation, or source text. Constructors use the name `new`. Selection is independent of `-l`, source depth, and output format; widening `--source` expands the selected declarations rather than changing the name search. No matches produces a successful empty result for an expression search.
+
+Usage and relationship queries accept exact simple names and delimiter-bounded type or member suffixes, such as `String.repeat`. Referenced-type queries accept type suffixes, such as `Map.Entry`. Source descriptions accept those suffixes when no qualified prefix matches. Multiple matching subjects form a union. `-e` and `-i` select declarations, not semantic relationship targets. There is no fuzzy scoring, ranking, or typo correction.
 
 > [!IMPORTANT]
 > This tool is currently in preview. Please share feedback for any of the tools in [Discussions](https://github.com/Netflix/ja/discussions).
@@ -53,7 +57,19 @@ jist HttpClient
 List declarations whose terminal names contain a fragment:
 
 ```sh
-jist -l --source none '*Queue*'
+jist -l -e Queue
+```
+
+Search declaration names without case sensitivity:
+
+```sh
+jist -l -i -e queue
+```
+
+Search a type's declarations with an anchored expression:
+
+```sh
+jist java.lang.String -e '^(intern|repeat)$'
 ```
 
 Select an exact package, type, or member prefix with a qualified name:

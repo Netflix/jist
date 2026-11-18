@@ -22,7 +22,13 @@ Jist is a symbol search and semantic relationship tool for Java compilation cont
   A declaration target containing a dot is an exact, delimiter-bounded qualified prefix. Usage and
   relationship targets also accept delimiter-bounded type or member suffixes; referenced-type queries
   accept type suffixes. Source descriptions resolve suffixes when no qualified prefix matches. Search does not perform
-  completion, substring matching, fuzzy scoring, ranking, or typo correction.
+  completion, fuzzy scoring, ranking, or typo correction. `-e`/`--regexp` explicitly searches declaration
+  simple names using Java regular expressions, with unanchored matching and a union of repeated
+  expressions. A positional name combined with `-e` constrains the owner or namespace. Match the
+  declaration's own simple name (`new` for constructors), never its owner or rendered text.
+  `-i`/`--ignore-case` changes declaration-name comparison only; preserve every matching identity and
+  its original spelling. Neither option applies to relationship targets. Selection must be identical
+  across source depths and output formats. An expression with no matches succeeds with empty output.
 - Default output uses literal source signatures when source is available and compiled signatures as
   its fallback. A Java file on a directory source path supersedes matching ClassFiles so uncompiled
   project changes are visible. Archive source enriches the matching ClassFile instead. Both are

@@ -19,6 +19,7 @@ import module java.base;
 import java.lang.classfile.Attributes;
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.ClassModel;
+import java.lang.classfile.MethodModel;
 import java.util.Map.Entry;
 import javax.lang.model.element.Modifier;
 import javax.tools.ToolProvider;
@@ -1645,7 +1646,7 @@ final class DeclarationSearch {
             List<ClassModel> classes) {}
 
     private record ContextMatch(String key, String symbol, SymbolKind kind,
-            String listedName, Attribution attribution) {}
+            String listedName, Attribution attribution, boolean implicitRecordMember) {}
 
     void printSymbolContext(Options opts, SymbolSelection query, PrintWriter out,
                             PrintWriter err)
@@ -1914,7 +1915,7 @@ final class DeclarationSearch {
                     source.sourceLocation(), span, model, emitted);
         }
         if (emitted.isEmpty() && !source.classes().isEmpty()) {
-            if (opts.source() != SourceScope.NONE) {
+            if (opts.source() != SourceScope.NONE && matches.stream().anyMatch(match -> !match.implicitRecordMember())) {
                 warnSourceUnavailable(out, source.unitName());
             }
             var visibility = opts.visibility() != null ? opts.visibility() : Visibility.LIBRARY;
@@ -2182,7 +2183,7 @@ final class DeclarationSearch {
         var owner = binaryName.replace('$', '.');
         if (matchesListedPrefix(selected, owner) && selected.listsType(model) && visibility.visible(classFlags)) {
             matches.add(new ContextMatch(owner, owner, SymbolKind.classKind(model), owner,
-                    attribution.getOrDefault(owner, Attribution.EMPTY)));
+                    attribution.getOrDefault(owner, Attribution.EMPTY), false));
         }
         if (selected.listsFields()) {
             for (var field : model.fields()) {
@@ -2196,7 +2197,7 @@ final class DeclarationSearch {
                 if (matchesListedPrefix(selected, symbol)) {
                     var key = owner + "#" + field.fieldName().stringValue();
                     matches.add(new ContextMatch(key, symbol, SymbolKind.FIELD, symbol,
-                            attribution.getOrDefault(key, Attribution.EMPTY)));
+                            attribution.getOrDefault(key, Attribution.EMPTY), false));
                 }
             }
         }
@@ -2223,12 +2224,41 @@ final class DeclarationSearch {
                 var symbol = owner + "." + publicName;
                 if (matchesListedPrefix(selected, symbol)) {
                     var key = attributionKey(owner, keyName, ordinal);
+                    var memberSource = attribution.getOrDefault(key, Attribution.EMPTY);
+                    boolean implicitRecordMember = !memberSource.declaration().present()
+                            && attribution.containsKey(owner)
+                            && mayBeImplicitRecordMethod(model, method);
                     matches.add(new ContextMatch(key, symbol, SymbolKind.METHOD, listedMethodSignature(owner, method),
-                            attribution.getOrDefault(key, Attribution.EMPTY)));
+                            memberSource, implicitRecordMember));
                 }
             }
         }
         return matches;
+    }
+
+    private static boolean mayBeImplicitRecordMethod(ClassModel model, MethodModel method) {
+        var record = model.findAttribute(Attributes.record()).orElse(null);
+        if (record == null) {
+            return false;
+        }
+        // Implicitly declared record methods are not marked synthetic in the ClassFile.
+        var descriptor = method.methodType();
+        var name = method.methodName().stringValue();
+        return switch (name) {
+            case "equals" -> descriptor.equalsString("(Ljava/lang/Object;)Z");
+            case "hashCode" -> descriptor.equalsString("()I");
+            case "toString" -> descriptor.equalsString("()Ljava/lang/String;");
+            case "<init>" -> {
+                var canonical = new StringBuilder("(");
+                for (var component : record.components()) {
+                    canonical.append(component.descriptor().stringValue());
+                }
+                yield descriptor.equalsString(canonical.append(")V").toString());
+            }
+            default -> record.components().stream().anyMatch(component ->
+                    component.name().equalsString(name)
+                            && descriptor.equalsString("()" + component.descriptor().stringValue()));
+        };
     }
 
     private static List<ContextMatch> contextMatches(SourceStructure structure, Options opts) {
@@ -2274,7 +2304,7 @@ final class DeclarationSearch {
                             || typeKind && opts.kinds().contains(SymbolKind.TYPE))
                     && matchesListedPrefix(opts, symbol)) {
                 matches.add(new ContextMatch(key, symbol, kind, listedNames.getOrDefault(key, symbol),
-                        entry.getValue()));
+                        entry.getValue(), false));
             }
         }
         return matches;

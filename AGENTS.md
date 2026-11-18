@@ -49,8 +49,10 @@ Jist is a symbol search and semantic relationship tool for Java compilation cont
 - Jist never associates ordinary comments with declarations. They appear only when lexically
   contained by the selected definition, symbol, type, or unit range.
 - If source output is unavailable, warn once per compilation unit on standard error and fall back to
-  deterministic ClassFile presentation without claiming source line numbers. `--source none` and
-  symbol-only listings do not warn.
+  deterministic ClassFile presentation without claiming source line numbers. When a record's source
+  is available, implicitly declared accessors, canonical constructors, and object methods use that
+  fallback without warning if no explicit declaration matches. `--source none` and symbol-only
+  listings do not warn.
 - Command-line preparation activates project compilation options from the nearest applicable
   `.java-tool-options/jist.args` file. No other project metadata discovery is performed.
 - `--module-path` defines observable application modules but does not root all of them. `--module`

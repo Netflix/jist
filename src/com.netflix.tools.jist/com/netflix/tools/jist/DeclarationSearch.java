@@ -2194,7 +2194,7 @@ final class DeclarationSearch {
                 }
                 var symbol = owner + "." + field.fieldName().stringValue();
                 if (matchesListedPrefix(selected, symbol)) {
-                    var key = binaryName + "#" + field.fieldName().stringValue();
+                    var key = owner + "#" + field.fieldName().stringValue();
                     matches.add(new ContextMatch(key, symbol, SymbolKind.FIELD, symbol,
                             attribution.getOrDefault(key, Attribution.EMPTY)));
                 }
@@ -2222,8 +2222,9 @@ final class DeclarationSearch {
                 var publicName = ConstantDescs.INIT_NAME.equals(name) ? "new" : name;
                 var symbol = owner + "." + publicName;
                 if (matchesListedPrefix(selected, symbol)) {
-                    matches.add(new ContextMatch(attributionKey(owner, keyName, ordinal), symbol, SymbolKind.METHOD, listedMethodSignature(owner, method),
-                            attribution.getOrDefault(attributionKey(binaryName, keyName, ordinal), Attribution.EMPTY)));
+                    var key = attributionKey(owner, keyName, ordinal);
+                    matches.add(new ContextMatch(key, symbol, SymbolKind.METHOD, listedMethodSignature(owner, method),
+                            attribution.getOrDefault(key, Attribution.EMPTY)));
                 }
             }
         }

@@ -210,6 +210,8 @@ class HelpTest {
             "--limit-modules",
             "--visibility",
             "--format",
+            "-e",
+            "--regexp",
             "--subtypes",
             "--supertypes",
             "--overrides",
@@ -294,6 +296,9 @@ class HelpTest {
                                                             private, or all
 
                 Search:
+                  -e, --regexp <expression>               Search declaration simple names by Java regular expression
+                                                            (unanchored; repeatable expressions form a union)
+                  -i, --ignore-case                      Ignore case when matching declaration names
                   --exclude-path <path>                   Exclude input paths from searches, not resolution
                                                             (path-separator-delimited, as with --class-path)
                   -k, --kind <kind>                       Include symbols of this kind; repeatable

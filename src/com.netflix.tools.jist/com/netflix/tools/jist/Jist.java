@@ -83,6 +83,10 @@ public final class Jist implements ToolProvider, OptionChecker {
             if (jsonOutput != null) {
                 out = jsonOutput;
             }
+            if ((!opts.expressions().isEmpty() || opts.ignoreCase())
+                    && (opts.usages() || opts.relationships() || opts.referencedTypes() != null)) {
+                throw new ToolException(1, "--regexp and --ignore-case select declarations, not relationship targets");
+            }
             if (opts.referencedTypes() != null) {
                 if (opts.target() != null || opts.usages() || opts.relationships() || opts.direct()) {
                     throw new ToolException(1, "--referenced-types cannot be combined with another query");
@@ -136,6 +140,22 @@ public final class Jist implements ToolProvider, OptionChecker {
                     return 0;
                 }
                 var declarations = new DeclarationSearch(environment);
+                if (!opts.expressions().isEmpty() || opts.ignoreCase()) {
+                    var listing = opts.kinds().isEmpty() ? opts.withKinds(defaultKinds()) : opts;
+                    var selection = opts.target() != null
+                                    && (Files.isRegularFile(Path.of(opts.target()))
+                                            || opts.target().contains(JAVA_EXT + ".")
+                                            || opts.target().contains(CLASS_EXT + "."))
+                            ? environment.resolveSymbolSelection(opts.target()) : null;
+                    if (selection != null && Files.isRegularFile(Path.of(selection.path()))) {
+                        declarations.printSymbolContext(listing, selection, out, err);
+                    } else if (opts.source() != null) {
+                        declarations.listSourceContexts(listing, out);
+                    } else {
+                        declarations.listClasses(listing, out);
+                    }
+                    return 0;
+                }
                 if (opts.target() != null) {
                     if (opts.usages()) {
                         if (!opts.kinds().isEmpty()) {

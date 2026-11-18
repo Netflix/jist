@@ -156,7 +156,8 @@ final class DeclarationSearch {
             this.options = opts;
             this.visibility = visibility;
             this.sources = sources;
-            this.matchCompiled = simpleNameTarget(opts.target()) || relationships != null || opts.source() == SourceScope.NONE;
+            this.matchCompiled = !opts.expressions().isEmpty() || opts.ignoreCase()
+                    || simpleNameTarget(opts.target()) || relationships != null || opts.source() == SourceScope.NONE;
         }
 
         void submit(ClassInput input) throws IOException, ToolException {
@@ -335,8 +336,11 @@ final class DeclarationSearch {
                 ? moduleName
                 : className.endsWith(".package-info") ? packageName(className) : className;
         if (symbol == null
-                || opts.target() != null && !matchesListedPrefix(opts, symbol)
-                        && !(opts.listsPackages() && matchesListedPrefix(opts, resourcePackageName(resourceName)))
+                || opts.target() != null && !matchesTarget(opts, symbol)
+                        && !(opts.listsPackages() && matchesTarget(opts, resourcePackageName(resourceName)))
+                        && !(opts.target().length() > symbol.length()
+                                && opts.target().charAt(symbol.length()) == '.'
+                                && opts.target().regionMatches(opts.ignoreCase(), 0, symbol, 0, symbol.length()))
                         && !(simpleNameTarget(opts.target()) && (opts.listsMethods() || opts.listsFields()))) {
             return false;
         }
@@ -407,7 +411,8 @@ final class DeclarationSearch {
             Map<String, EnumeratedSource> parsedSources)
             throws IOException, ToolException {
         emitClassSourceContext(opts, out, prepareClassSourceContext(opts, model, classLocation, visibility, sources,
-                        simpleNameTarget(opts.target()) || relationships != null || opts.source() == SourceScope.NONE),
+                        !opts.expressions().isEmpty() || opts.ignoreCase()
+                                || simpleNameTarget(opts.target()) || relationships != null || opts.source() == SourceScope.NONE),
                 visibility, sources, emittedSources, emittedPackages, parsedSources);
     }
 
@@ -431,7 +436,8 @@ final class DeclarationSearch {
         }
         var matches = matchCompiled ? contextMatches(model, binaryName, classFlags, Map.of(), opts, visibility) : null;
         if (matches != null && matches.isEmpty()
-                && (simpleNameTarget(opts.target()) || opts.source() == SourceScope.NONE)
+                && (!opts.expressions().isEmpty() || opts.ignoreCase()
+                        || simpleNameTarget(opts.target()) || opts.source() == SourceScope.NONE)
                 && !mayEmitPackage(opts, binaryName)) {
             return null;
         }
@@ -500,7 +506,7 @@ final class DeclarationSearch {
                         || relationshipMatches(compiledMatches, false, true).isEmpty())) {
             return;
         }
-        if (simpleNameTarget(opts.target()) && compiledMatches.isEmpty()) {
+        if (compiledMatches != null && compiledMatches.isEmpty()) {
             return;
         }
         var className = binaryName.replace('$', '.');
@@ -909,7 +915,8 @@ final class DeclarationSearch {
 
     private void listSourceSymbols(Options opts, PrintWriter out, Set<String> emittedPackages) throws IOException, ToolException {
         var target = opts.target();
-        var name = target == null || target.indexOf('*') >= 0 ? null : target.substring(target.lastIndexOf('.') + 1);
+        var name = target == null || opts.ignoreCase() || target.indexOf('*') >= 0
+                ? null : target.substring(target.lastIndexOf('.') + 1);
         var compiler = ToolProvider.getSystemJavaCompiler();
         try (var fileManager = compiler.getStandardFileManager(null, Locale.ROOT, StandardCharsets.UTF_8)) {
             for (var sourceRoot : environment.sourceRoots()) {
@@ -1213,7 +1220,7 @@ final class DeclarationSearch {
     }
 
     private static String matchingMemberSymbol(Options opts, String className, String memberName) {
-        if (simpleNameTarget(opts.target())) {
+        if (opts.expressions().isEmpty() && simpleNameTarget(opts.target())) {
             return matchesListedPrefix(opts, memberName) ? className + "." + memberName : null;
         }
         var symbol = className + "." + memberName;
@@ -1221,6 +1228,22 @@ final class DeclarationSearch {
     }
 
     private static boolean matchesListedPrefix(Options opts, String symbol) {
+        if (!matchesTarget(opts, symbol)) {
+            return false;
+        }
+        if (opts.expressions().isEmpty()) {
+            return true;
+        }
+        int start = symbol.lastIndexOf('.') + 1;
+        for (var expression : opts.expressions()) {
+            if (expression.matcher(symbol).region(start, symbol.length()).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean matchesTarget(Options opts, String symbol) {
         var prefix = opts.target();
         if (prefix == null) {
             return true;
@@ -1228,22 +1251,36 @@ final class DeclarationSearch {
         boolean simple = simpleNameTarget(prefix);
         int start = simple ? symbol.lastIndexOf('.') + 1 : 0;
         if (opts.listOnly() && prefix.indexOf('*') >= 0) {
-            return wildcardMatches(prefix, symbol, start);
+            return wildcardMatches(prefix, symbol, start, opts.ignoreCase());
         }
         if (simple) {
-            return symbol.length() - start == prefix.length() && symbol.startsWith(prefix, start);
+            if (!opts.expressions().isEmpty()) {
+                for (int segment = 0; segment < symbol.length();) {
+                    int end = symbol.indexOf('.', segment);
+                    if (end < 0) end = symbol.length();
+                    if (end - segment == prefix.length()
+                            && symbol.regionMatches(opts.ignoreCase(), segment, prefix, 0, prefix.length())) {
+                        return true;
+                    }
+                    segment = end + 1;
+                }
+                return false;
+            }
+            return symbol.length() - start == prefix.length()
+                    && symbol.regionMatches(opts.ignoreCase(), start, prefix, 0, prefix.length());
         }
-        return symbol.startsWith(prefix)
+        return symbol.regionMatches(opts.ignoreCase(), 0, prefix, 0, prefix.length())
                 && (symbol.length() == prefix.length() || symbol.charAt(prefix.length()) == '.');
     }
 
-    private static boolean wildcardMatches(String pattern, String candidate, int start) {
+    private static boolean wildcardMatches(String pattern, String candidate, int start, boolean ignoreCase) {
         int patternIndex = 0;
         int candidateIndex = start;
         int wildcardIndex = -1;
         int wildcardCandidateIndex = -1;
         while (candidateIndex < candidate.length()) {
-            if (patternIndex < pattern.length() && pattern.charAt(patternIndex) == candidate.charAt(candidateIndex)) {
+            if (patternIndex < pattern.length()
+                    && candidate.regionMatches(ignoreCase, candidateIndex, pattern, patternIndex, 1)) {
                 patternIndex++;
                 candidateIndex++;
             } else if (patternIndex < pattern.length() && pattern.charAt(patternIndex) == '*') {
@@ -2138,7 +2175,8 @@ final class DeclarationSearch {
     private static List<ContextMatch> contextMatches(ClassModel model, String binaryName, Set<AccessFlag> classFlags,
             Map<String, Attribution> attribution, Options opts, Visibility visibility) {
         var selected = opts.kinds().isEmpty() ? opts.withKinds(defaultKinds()) : opts;
-        var simpleTarget = simpleNameTarget(selected.target()) && selected.target().indexOf('*') < 0 ? selected.target() : null;
+        var simpleTarget = selected.expressions().isEmpty() && !selected.ignoreCase()
+                && simpleNameTarget(selected.target()) && selected.target().indexOf('*') < 0 ? selected.target() : null;
         var methodTarget = "new".equals(simpleTarget) ? ConstantDescs.INIT_NAME : simpleTarget;
         var matches = new ArrayList<ContextMatch>();
         var owner = binaryName.replace('$', '.');

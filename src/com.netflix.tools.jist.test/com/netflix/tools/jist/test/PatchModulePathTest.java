@@ -112,12 +112,13 @@ class PatchModulePathTest {
         for (var path : List.of(PATCH.toString(), ARCHIVE.toString(), PATCH + File.pathSeparator + SECOND)) {
             var result = run("--patch-module", "library=" + path, "--module", "library", "--source", "none", "-l", "--kind", "method", "library.api.Target");
             success(result);
-            assertTrue(result.output().contains("method library.api.Target.changed()\n"), result.output());
+            var origin = path.equals(ARCHIVE.toString()) ? "(patch.jar)" : "";
+            assertTrue(result.output().contains("method library/library.api.Target.changed()" + origin + "\n"), result.output());
             assertFalse(result.output().contains("original"), result.output());
             assertFalse(result.output().contains("second"), result.output());
             var unchanged = run("--patch-module", "library=" + path, "--module", "library", "--source", "none", "-l", "--kind", "type", "library.api.Unchanged");
             success(unchanged);
-            assertEquals("class library.api.Unchanged\n", unchanged.output());
+            assertEquals("class library/library.api.Unchanged\n", unchanged.output());
         }
     }
 
@@ -125,8 +126,8 @@ class PatchModulePathTest {
     void compiledCallersUsePatchPrecedenceAndNewPackagesInTheSelectedModule() {
         var result = run("--patch-module", "library=" + PATCH, "--module", "library", "--source", "none", "-l", "--callers", "java.lang.String.repeat");
         success(result);
-        assertTrue(result.output().contains("method library.api.Target.run()\n"), result.output());
-        assertTrue(result.output().contains("method patch.internal.Added.run()\n"), result.output());
+        assertTrue(result.output().contains("method library/library.api.Target.run()\n"), result.output());
+        assertTrue(result.output().contains("method library/patch.internal.Added.run()\n"), result.output());
         var original = run("--patch-module", "library=" + PATCH, "--module", "library", "--source", "none", "-l", "--callers", "java.lang.String.strip");
         success(original);
         assertFalse(original.output().contains("library.api.Target.run"), original.output());
@@ -136,12 +137,12 @@ class PatchModulePathTest {
     void patchSourcesParticipateInAttributionAndDeclarationSearch() {
         var result = run("--patch-module", "library=" + PATCH_SOURCES, "--module", "library", "--source", "none", "-l", "--kind", "method", "library.api.Target");
         success(result);
-        assertTrue(result.output().contains("method library.api.Target.changed()\n"), result.output());
+        assertTrue(result.output().contains("method library/library.api.Target.changed()\n"), result.output());
         assertFalse(result.output().contains("original"), result.output());
         var sourceCaller = run("--patch-module", "library=" + PATCH, "--module-source-path", CALLER_SOURCES.toString(),
                 "--module", "application", "--source", "none", "-l", "--callers", "library.api.Target.changed");
         success(sourceCaller);
-        assertEquals("method application.Caller.call()\n", sourceCaller.output());
+        assertEquals("method application/application.Caller.call()\n", sourceCaller.output());
     }
 
     @Test
@@ -153,7 +154,7 @@ class PatchModulePathTest {
         var exported = run("--patch-module", "library=" + PATCH, "--module", "application", "--add-exports", "library/patch.internal=application",
                 "--source", "none", "-l", "--kind", "type", "patch.internal");
         success(exported);
-        assertEquals("class patch.internal.Added\n", exported.output());
+        assertEquals("class library/patch.internal.Added\n", exported.output());
     }
 
     @Test
@@ -174,8 +175,8 @@ class PatchModulePathTest {
         var callers = run("--patch-module", "library=" + PATCH_SOURCES, "--module", "library",
                 "--source", "none", "-l", "--callers", "java.lang.String.repeat");
         success(callers);
-        assertTrue(callers.output().contains("method library.api.Target.run()\n"), callers.output());
-        assertTrue(callers.output().contains("method patch.internal.Added.run()\n"), callers.output());
+        assertTrue(callers.output().contains("method library/library.api.Target.run()\n"), callers.output());
+        assertTrue(callers.output().contains("method library/patch.internal.Added.run()\n"), callers.output());
     }
 
     @Test
@@ -209,12 +210,12 @@ class PatchModulePathTest {
         var result = run("--patch-module", "java.logging=" + SYSTEM, "--module", "java.logging", "--limit-modules", "java.base,java.logging",
                 "--source", "none", "-l", "--kind", "method", "java.util.logging.Logger");
         success(result);
-        assertTrue(result.output().contains("method java.util.logging.Logger.changed()\n"), result.output());
+        assertTrue(result.output().contains("method java.logging@" + java.lang.module.ModuleFinder.ofSystem().find("java.logging").orElseThrow().descriptor().rawVersion().orElseThrow() + "/java.util.logging.Logger.changed()\n"), result.output());
         assertFalse(result.output().contains("getName"), result.output());
         var callers = run("--patch-module", "java.logging=" + SYSTEM, "--module", "java.logging", "--limit-modules", "java.base,java.logging",
                 "--source", "none", "-l", "--callers", "java.lang.String.repeat");
         success(callers);
-        assertTrue(callers.output().contains("method java.util.logging.Logger.changed()\n"), callers.output());
+        assertTrue(callers.output().contains("method java.logging@" + java.lang.module.ModuleFinder.ofSystem().find("java.logging").orElseThrow().descriptor().rawVersion().orElseThrow() + "/java.util.logging.Logger.changed()\n"), callers.output());
     }
 
     @Test

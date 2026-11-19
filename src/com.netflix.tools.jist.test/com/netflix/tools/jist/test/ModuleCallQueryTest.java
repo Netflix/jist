@@ -88,7 +88,7 @@ class ModuleCallQueryTest {
         for (boolean source : List.of(false, true)) {
             var result = run(source, "--add-modules", "library", "--callers", "library.api.Target.touch");
             success(result);
-            assertEquals("method library.api.Target.run()\n", result.output());
+            assertEquals("method library/library.api.Target.run()\n", result.output());
         }
     }
 
@@ -97,8 +97,8 @@ class ModuleCallQueryTest {
         for (boolean source : List.of(false, true)) {
             var result = run(source, "--module", "application", "--callers", "library.api.Target.touch");
             success(result);
-            assertTrue(result.output().contains("method application.internal.Caller.run()\n"), result.output());
-            assertTrue(result.output().contains("method library.friend.Friend.run()\n"), result.output());
+            assertTrue(result.output().contains("method application/application.internal.Caller.run()\n"), result.output());
+            assertTrue(result.output().contains("method library/library.friend.Friend.run()\n"), result.output());
             assertFalse(result.output().contains("library.internal.Hidden"), result.output());
             assertFalse(result.output().contains("unrelated.api.Other"), result.output());
         }
@@ -126,7 +126,7 @@ class ModuleCallQueryTest {
                 "-l"));
 
         success(result);
-        assertEquals("method application.internal.SourceCaller.run()\n", result.output());
+        assertEquals("method application/application.internal.SourceCaller.run()\n", result.output());
     }
 
     @Test
@@ -135,7 +135,7 @@ class ModuleCallQueryTest {
             var visible = run(source, "--module", "application", "--add-exports", "library/library.internal=application",
                     "--callers", "library.api.Target.touch");
             success(visible);
-            assertTrue(visible.output().contains("method library.internal.Hidden.hidden()\n"), visible.output());
+            assertTrue(visible.output().contains("method library/library.internal.Hidden.hidden()\n"), visible.output());
             var hidden = run(source, "--module", "application", "--add-exports", "library/library.internal=unrelated",
                     "--callers", "library.api.Target.touch");
             success(hidden);
@@ -153,7 +153,7 @@ class ModuleCallQueryTest {
             var read = run(source, "--module", "application", "--add-modules", "unrelated", "--add-reads", "application=unrelated",
                     "--callers", "library.api.Target.touch");
             success(read);
-            assertTrue(read.output().contains("method unrelated.api.Other.run()\n"), read.output());
+            assertTrue(read.output().contains("method unrelated/unrelated.api.Other.run()\n"), read.output());
         }
     }
 
@@ -162,8 +162,8 @@ class ModuleCallQueryTest {
         for (boolean source : List.of(false, true)) {
             var result = run(source, "--module", "application,library", "--callers", "library.api.Target.touch");
             success(result);
-            assertTrue(result.output().contains("method application.internal.Caller.run()\n"), result.output());
-            assertTrue(result.output().contains("method library.internal.Hidden.hidden()\n"), result.output());
+            assertTrue(result.output().contains("method application/application.internal.Caller.run()\n"), result.output());
+            assertTrue(result.output().contains("method library/library.internal.Hidden.hidden()\n"), result.output());
         }
     }
 
@@ -172,10 +172,10 @@ class ModuleCallQueryTest {
         for (boolean source : List.of(false, true)) {
             var hidden = run(source, "--module", "application", "--callees", "library.api.Target.run");
             success(hidden);
-            assertEquals("method library.api.Target.touch()\n", hidden.output());
+            assertEquals("method library/library.api.Target.touch()\n", hidden.output());
             var visible = run(source, "--module", "library", "--callees", "library.api.Target.run");
             success(visible);
-            assertTrue(visible.output().contains("method library.internal.Hidden.hidden()\n"), visible.output());
+            assertTrue(visible.output().contains("method library/library.internal.Hidden.hidden()\n"), visible.output());
         }
     }
 
@@ -209,9 +209,7 @@ class ModuleCallQueryTest {
 
         success(result);
         assertTrue(result.output().contains("java.base@"), result.output());
-        assertTrue(result.output().contains("/java.lang.String(String.java:"), result.output());
-        assertFalse(result.output().contains("jrt:/"), result.output());
-        assertFalse(result.output().contains("String.class:"), result.output());
+        assertTrue(result.output().contains("/java.lang.String(jrt:/java.base/java/lang/String.class:"), result.output());
     }
 
     @Test

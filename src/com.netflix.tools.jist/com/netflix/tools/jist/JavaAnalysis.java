@@ -28,6 +28,7 @@ import javax.tools.Diagnostic.Kind;
 import javax.tools.DiagnosticCollector;
 import javax.tools.JavaFileObject;
 import javax.tools.StandardJavaFileManager;
+import javax.tools.StandardLocation;
 import javax.tools.ToolProvider;
 
 import com.sun.source.tree.CompilationUnitTree;
@@ -42,6 +43,7 @@ final class JavaAnalysis implements Closeable {
     private final SearchEnvironment environment;
     private final JavacTask task;
     private final List<CompilationUnitTree> units;
+    private Map<URI, String> sourceOrigins = Map.of();
     private final Map<String, ExecutableElement> methods = new HashMap<>();
     private final Map<ExecutableElement, String> descriptors = new IdentityHashMap<>();
     private final Map<ExecutableElement, String> signatures = new IdentityHashMap<>();
@@ -132,12 +134,41 @@ final class JavaAnalysis implements Closeable {
             task.parse().forEach(units::add);
             task.analyze();
             var analysis = new JavaAnalysis(manager, diagnostics, environment, task, List.copyOf(units));
+            analysis.sourceOrigins = Map.of(input.toUri(), source.origin());
             analysis.checkDiagnostics();
             return analysis;
         } catch (IOException | ToolException | RuntimeException | Error e) {
             manager.close();
             throw e;
         }
+    }
+
+    Output.SymbolLocation typeLocation(TypeElement type) throws IOException {
+        var path = trees().getPath(type);
+        if (path != null) {
+            var uri = path.getCompilationUnit().getSourceFile().toUri();
+            var location = sourceOrigins.getOrDefault(uri,
+                    "file".equals(uri.getScheme()) ? SearchEnvironment.unitLocation(Path.of(uri)) : uri.toString());
+            var sourceName = path.getCompilationUnit().getSourceFile().getName();
+            return new Output.SymbolLocation(null, location, sourceName.substring(sourceName.lastIndexOf('/') + 1));
+        }
+        var name = elements().getBinaryName(type).toString();
+        var module = elements().getModuleOf(type);
+        JavaFileObject file = null;
+        if (module == null || module.isUnnamed()) {
+            file = fileManager.getJavaFileForInput(StandardLocation.CLASS_PATH, name, JavaFileObject.Kind.CLASS);
+        } else {
+            for (var base : List.of(StandardLocation.PATCH_MODULE_PATH, StandardLocation.UPGRADE_MODULE_PATH,
+                    StandardLocation.SYSTEM_MODULES, StandardLocation.MODULE_PATH)) {
+                if (!fileManager.hasLocation(base)) continue;
+                var location = fileManager.getLocationForModule(base, module.getQualifiedName().toString());
+                if (location != null) file = fileManager.getJavaFileForInput(location, name, JavaFileObject.Kind.CLASS);
+                if (file != null) break;
+            }
+        }
+        var uri = file == null ? null : file.toUri();
+        var location = uri == null ? null : "file".equals(uri.getScheme()) ? SearchEnvironment.unitLocation(Path.of(uri)) : uri.toString();
+        return new Output.SymbolLocation(location, null, null);
     }
 
     Elements elements() {

@@ -23,7 +23,6 @@ import com.netflix.tools.jist.CommandLine.Completion;
 import com.netflix.tools.jist.CommandLine.CompletionRequest;
 import com.netflix.tools.jist.Output.InteractivePrintWriter;
 import com.netflix.tools.jist.Output.JsonPrintWriter;
-import com.netflix.tools.jist.Output.SourceWarningPrintWriter;
 import com.netflix.tools.jist.Output.SourceWarnings;
 
 import static com.netflix.tools.jist.DeclarationSearch.defaultKinds;
@@ -95,6 +94,7 @@ public final class Jist implements ToolProvider, OptionChecker {
                     throw new ToolException(1, "--referenced-types lists types and accepts only --source none");
                 }
                 try (var environment = new SearchEnvironment(opts)) {
+                    out = formattedOutput(opts, out, err, terminal, new OriginResolver(environment, opts));
                     ReferencedTypes.list(opts, environment, out);
                 }
                 return 0;
@@ -115,7 +115,7 @@ public final class Jist implements ToolProvider, OptionChecker {
                                 : opts.source() != null ? opts.source() : SourceScope.SIGNATURE);
             }
             try (var environment = new SearchEnvironment(opts)) {
-                out = formattedOutput(opts, out, err, terminal, environment.modules().systemVersions());
+                out = formattedOutput(opts, out, err, terminal, new OriginResolver(environment, opts));
                 if (opts.relationships()) {
                     try (var relationships = opts.hierarchy() ? RelationshipSearch.open(opts, environment) : null;
                             var calls = opts.calls() ? CallSearch.open(opts, environment) : null) {
@@ -261,7 +261,7 @@ public final class Jist implements ToolProvider, OptionChecker {
     }
 
     private static PrintWriter formattedOutput(Options opts, PrintWriter out, PrintWriter err, boolean terminal,
-            Map<String, String> systemVersions) {
+            OriginResolver origins) {
         var compactFile = compactSourceFileOutput(opts);
         var heading = !compactFile
                 && (opts.listOnly()
@@ -273,12 +273,6 @@ public final class Jist implements ToolProvider, OptionChecker {
                     terminal && System.getenv("NO_COLOR") == null && !"dumb".equals(System.getenv("TERM"));
         };
         var warnings = new SourceWarnings(err);
-        var system = "none".equals(opts.system())
-                ? null
-                : Path.of(opts.system() == null ? System.getProperty("java.home") : opts.system())
-                        .toAbsolutePath()
-                        .normalize()
-                        .toString();
         if (opts.format() == OutputFormat.JSON) {
             return new InteractivePrintWriter(
                     out,
@@ -289,29 +283,12 @@ public final class Jist implements ToolProvider, OptionChecker {
                     opts.lineNumber(),
                     false,
                     false,
-                    system,
-                    systemVersions,
+                    origins,
                     warnings);
         }
-        return compactFile
-                        || heading
-                        || color
-                        || opts.showOrigin()
-                        || !opts.lineNumber()
-                        || opts.breakMatches()
-                ? new InteractivePrintWriter(
-                        out,
-                        heading,
-                        color,
-                        opts.listOnly(),
-                        opts.showOrigin(),
-                        opts.lineNumber(),
-                        opts.breakMatches(),
-                        compactFile,
-                        system,
-                        systemVersions,
-                        warnings)
-                : new SourceWarningPrintWriter(out, warnings);
+        return new InteractivePrintWriter(
+                out, heading, color, opts.listOnly(), opts.showOrigin(), opts.lineNumber(), opts.breakMatches(),
+                compactFile, origins, warnings);
     }
 
     private static boolean compactSourceFileOutput(Options opts) {

@@ -139,12 +139,13 @@ class CompiledInputQueryTest {
                             .withMethodBody("hit", MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_int),
                                     ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC, code -> code.return_())));
                     jar.closeEntry();
-                    var fields = List.of("field " + name + ".hit");
-                    var methods = List.of("method " + name + ".hit()", "method " + name + ".hit(int)");
+                    var origin = "(" + archive.getFileName() + ")";
+                    var fields = List.of("field " + name + ".hit" + origin);
+                    var methods = List.of("method " + name + ".hit()" + origin, "method " + name + ".hit(int)" + origin);
                     visible.addAll(fields);
                     visible.addAll(methods);
                     all.addAll(fields);
-                    all.add("field " + name + ".hot");
+                    all.add("field " + name + ".hot" + origin);
                     all.addAll(methods);
                 }
             }
@@ -203,8 +204,7 @@ class CompiledInputQueryTest {
         assertEquals(0, status, error.toString());
         var rows = Json.parse(output.toString()).get("results").asList();
         var warnings = query.equals("--usages") ? rows.stream().map(row -> {
-            var text = row.get("text").asString();
-            return "Warning: Source unavailable for " + text.substring(0, text.indexOf(':'))
+            return "Warning: Source unavailable for " + row.get("unit").asString()
                     + "; using ClassFile information\n";
         }).collect(java.util.stream.Collectors.joining()) : "";
         assertEquals(warnings, error.toString());

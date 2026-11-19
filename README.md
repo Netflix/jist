@@ -103,13 +103,23 @@ Show source documentation and the complete declaration:
 jist --source definition java.lang.String.length
 ```
 
+Results include compact resolution origins by default. Named modules use `module@version/` qualification, with versions taken from resolved module descriptors, including the selected JDK system image. Class-path entries remain unnamed even when a JAR contains a module descriptor. Archive names identify containing binaries; attached source does not replace that defining location. For example:
+
+```text
+class example.library@1.2.3/example.Widget(library-1.2.3.jar)
+class example.Widget(library-1.2.3.jar)
+java.base@27.0.1/java.lang.String(String.java:4034): java.lang.String.indent(int) -> java.lang.String.repeat(int)
+```
+
+Use `--show-origin` for full resolution locations instead of short archive or source filenames.
+
 Stream qualified, machine-readable results:
 
 ```sh
 jist --format json java.lang.String.length
 ```
 
-JSON output streams a version 1 envelope with `format: "jist"` and a `results` array. Each result contains `text` and available structured `origin` and `source` information. The envelope ends with `exitCode` and `diagnostics`, for example:
+JSON output streams a version 1 envelope with `format: "jist"` and a `results` array. Each result contains `text` and available structured `origin` and `source` information. Symbol listings also contain undecorated `symbol` identities and declaration `kind`; source and ClassFile presentation rows contain the owning `unit`. Consumers should use these identities rather than parsing display text. `origin.classLocation` retains the defining ClassFile location separately from attached-source locations and ranges. The envelope ends with `exitCode` and `diagnostics`, for example:
 
 ```json
 {"format":"jist","version":1,"results":[],"exitCode":1,"diagnostics":[{"kind":"not_found","message":"Executable not found: example.Missing.run"}]}

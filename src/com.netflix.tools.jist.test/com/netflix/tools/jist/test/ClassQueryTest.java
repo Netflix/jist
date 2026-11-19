@@ -49,6 +49,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ClassQueryTest {
+    private static final String JAVA_BASE = "java.base@" + Object.class.getModule().getDescriptor().rawVersion().orElseThrow() + "/";
 
     private static final Path ROOT = Path.of("build/test-class-query");
     private static final Path SOURCE = ROOT.resolve("src/com/example/Example.java");
@@ -540,7 +541,7 @@ class ClassQueryTest {
                 sources.write(("package ordered;\n\npublic class " + name + " {\n    public void work() {}\n}\n")
                         .getBytes(StandardCharsets.UTF_8));
                 sources.closeEntry();
-                expected.add("ordered." + name + "(" + name + ".java:4):     public void work() {}");
+                expected.add("ordered." + name + "(ordered.jar!/" + name + ".java:4):     public void work() {}");
             }
         }
         List<String> directoryOrder;
@@ -673,7 +674,7 @@ class ClassQueryTest {
         assertEquals(0, result.exitCode(), result.error());
         assertEquals("", result.error());
         assertEquals(List.of(
-                "external.Attached(Attached.java:3):     public void marker() {}",
+                "external.Attached(mixed.jar!/Attached.java:3):     public void marker() {}",
                 "mixed.Shared(Shared.java:3):     public String marker() { return \"current\"; }"),
                 result.output().lines().toList());
     }
@@ -850,9 +851,9 @@ class ClassQueryTest {
                 "type", "-k", "method");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertTrue(result.output().contains("modular.api.ModuleType: public class ModuleType"),
+        assertTrue(result.output().contains("sample.module/modular.api.ModuleType(sample.module.jar): public class ModuleType"),
                 result.output());
-        assertTrue(result.output().contains("modular.api.ModuleType: public void act()"),
+        assertTrue(result.output().contains("sample.module/modular.api.ModuleType(sample.module.jar): public void act()"),
                 result.output());
         assertFalse(result.output().contains("modular.internal.HiddenType"),
                 result.output());
@@ -875,12 +876,12 @@ class ClassQueryTest {
                 "module", "-k", "package");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertEquals("module java.base",
+        assertEquals("module " + JAVA_BASE.substring(0, JAVA_BASE.length() - 1),
                 result.output()
                       .lines()
                       .findFirst()
                       .orElseThrow());
-        assertTrue(result.output().contains("package java.lang\n"),
+        assertTrue(result.output().contains("package " + JAVA_BASE + "java.lang\n"),
                 result.output());
     }
 
@@ -1039,9 +1040,9 @@ class ClassQueryTest {
         var result = run("--class-path", malformedJar.toString(), "-k", "method");
 
         assertEquals(2, result.exitCode());
-        assertTrue(result.output().startsWith("com.example.Example: public Example()"),
+        assertTrue(result.output().startsWith("com.example.Example(malformed.jar): public Example()"),
                 result.output());
-        assertTrue(result.output().contains("com.example.Example: public int run(int amount)"),
+        assertTrue(result.output().contains("com.example.Example(malformed.jar): public int run(int amount)"),
                 result.output());
     }
 
@@ -1173,9 +1174,9 @@ class ClassQueryTest {
         var result = run("-s", "none", "java.lang.String");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertTrue(result.output().startsWith("java.lang.String: public final class String"),
+        assertTrue(result.output().startsWith(JAVA_BASE + "java.lang.String: public final class String"),
                 result.output());
-        assertTrue(result.output().contains("java.lang.String: public boolean isEmpty() { /* body omitted */ }"),
+        assertTrue(result.output().contains(JAVA_BASE + "java.lang.String: public boolean isEmpty() { /* body omitted */ }"),
                 result.output());
         assertFalse(result.output().contains("package java.lang;"),
                 result.output());
@@ -1434,17 +1435,17 @@ class ClassQueryTest {
             assertEquals(0, methods.exitCode(), methods.error());
             assertEquals("", methods.error());
             assertEquals(List.of(
-                    "method com.example.Example.run(int)",
-                    "method com.example.Overloads.run()",
-                    "method com.example.Overloads.run(java.lang.String)",
-                    "method com.example.Overloads.run(int)"), methods.output().lines().toList(), target);
+                    "method com.example.Example.run(int)(members.jar)",
+                    "method com.example.Overloads.run()(members.jar)",
+                    "method com.example.Overloads.run(java.lang.String)(members.jar)",
+                    "method com.example.Overloads.run(int)(members.jar)"), methods.output().lines().toList(), target);
         }
         for (var target : List.of("new", "n*w", "*new*", "*n*e*w*")) {
             var constructors = run("--system", "none", "--class-path", archive.toString(),
                     "--source", "none", "--visibility", "all", "-l", target);
             assertEquals(0, constructors.exitCode(), constructors.error());
             assertEquals("", constructors.error());
-            assertEquals(List.of("method com.example.Example.new()", "method com.example.Overloads.new()"),
+            assertEquals(List.of("method com.example.Example.new()(members.jar)", "method com.example.Overloads.new()(members.jar)"),
                     constructors.output().lines().toList(), target);
         }
         for (var target : List.of("VALUE", "V*UE", "*VALUE*", "com.example.Example.VALUE")) {
@@ -1452,7 +1453,7 @@ class ClassQueryTest {
                     "--source", "none", "--visibility", "all", "-l", target);
             assertEquals(0, fields.exitCode(), fields.error());
             assertEquals("", fields.error());
-            assertEquals("field com.example.Example.VALUE\n", fields.output(), target);
+            assertEquals("field com.example.Example.VALUE(members.jar)\n", fields.output(), target);
         }
     }
 
@@ -1492,7 +1493,7 @@ class ClassQueryTest {
                 "none", "-l", "-k", "field", "VALUE");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertEquals("field com.example.Example.VALUE\n", result.output());
+        assertEquals("field com.example.Example.VALUE(example.jar)\n", result.output());
     }
 
     @Test
@@ -1512,7 +1513,7 @@ class ClassQueryTest {
                 "VALUE");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertEquals("\033[36mfield\033[0m \033[1;35mcom.example.Example.VALUE\033[0m\n", result.output());
+        assertEquals("\033[36mfield\033[0m \033[1;35mcom.example.Example.VALUE(example.jar)\033[0m\n", result.output());
     }
 
     @Test
@@ -1520,9 +1521,9 @@ class ClassQueryTest {
         var result = run("-l", "--color", "never", "-k", "method", "java.lang.String.valueOf");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertTrue(result.output().contains("method java.lang.String.valueOf(int)\n"),
+        assertTrue(result.output().contains("method " + JAVA_BASE + "java.lang.String.valueOf(int)\n"),
                 result.output());
-        assertTrue(result.output().contains("method java.lang.String.valueOf(java.lang.Object)\n"),
+        assertTrue(result.output().contains("method " + JAVA_BASE + "java.lang.String.valueOf(java.lang.Object)\n"),
                 result.output());
     }
 
@@ -1532,7 +1533,7 @@ class ClassQueryTest {
                 "interface", "java.util.List");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertEquals("interface java.util.List\n", result.output());
+        assertEquals("interface " + JAVA_BASE + "java.util.List\n", result.output());
     }
 
     @Test
@@ -1550,7 +1551,7 @@ class ClassQueryTest {
         var result = run("--class-path", JAR.toString(), "com.example.Example.run");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertTrue(result.output().contains("com.example.Example: public int run(int amount)"),
+        assertTrue(result.output().contains("com.example.Example(example.jar): public int run(int amount)"),
                 result.output());
     }
 
@@ -1559,7 +1560,7 @@ class ClassQueryTest {
         var result = run("--module-path", MODULE_JAR.toString(), "--add-modules", "sample.module", "modular.api.ModuleType.act");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertTrue(result.output().contains("modular.api.ModuleType: public void act()"),
+        assertTrue(result.output().contains("sample.module/modular.api.ModuleType(sample.module.jar): public void act()"),
                 result.output());
     }
 
@@ -1578,7 +1579,7 @@ class ClassQueryTest {
                 "sample.module/modular.internal=ALL-UNNAMED", "modular.internal.HiddenType");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertTrue(result.output().contains("modular.internal.HiddenType: public class HiddenType"),
+        assertTrue(result.output().contains("sample.module/modular.internal.HiddenType(sample.module.jar): public class HiddenType"),
                 result.output());
     }
 
@@ -1587,7 +1588,7 @@ class ClassQueryTest {
         var result = run("--module-path", MODULE_JAR.toString(), "--add-modules", "sample.module", "modular.api.ModuleType.act");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertTrue(result.output().contains("modular.api.ModuleType: public void act()"),
+        assertTrue(result.output().contains("sample.module/modular.api.ModuleType(sample.module.jar): public void act()"),
                 result.output());
     }
 
@@ -1621,22 +1622,22 @@ class ClassQueryTest {
                 "type");
 
         assertEquals(0, module.exitCode(), module.error());
-        assertTrue(module.output().contains("sample.module: module sample.module {"),
+        assertTrue(module.output().contains("sample.module(sample.module.jar): module sample.module {"),
                 module.output());
         assertTrue(module.output().contains("exports modular.api;"),
                 module.output());
         assertEquals(0, packageResult.exitCode(), packageResult.error());
-        assertEquals("modular.api: @Deprecated package modular.api;\n", packageResult.output());
+        assertEquals("sample.module/modular.api(sample.module.jar): @Deprecated package modular.api;\n", packageResult.output());
         assertEquals(0, direct.exitCode(), direct.error());
         assertTrue(direct.output().contains("sample.module: module sample.module {"),
                 direct.output());
         assertEquals(0, directPackage.exitCode(), directPackage.error());
         assertEquals("modular.api: @Deprecated package modular.api;\n", directPackage.output());
         assertEquals(0, unfiltered.exitCode(), unfiltered.error());
-        assertTrue(unfiltered.output().contains("sample.module: module sample.module {"),
+        assertTrue(unfiltered.output().contains("sample.module(sample.module.jar): module sample.module {"),
                 unfiltered.output());
         assertEquals(0, ordered.exitCode(), ordered.error());
-        assertEquals(List.of("module sample.module", "package modular.api", "class modular.api.ModuleType"),
+        assertEquals(List.of("module sample.module", "package sample.module/modular.api", "class sample.module/modular.api.ModuleType"),
                 ordered.output()
                        .lines()
                        .limit(3)
@@ -1664,7 +1665,8 @@ class ClassQueryTest {
                 arguments.addAll(List.of("--source", "none", "--kind", "package", "modular.api"));
                 var result = run(arguments.toArray(String[]::new));
                 assertEquals(0, result.exitCode(), result.error());
-                assertEquals("modular.api: @Deprecated package modular.api;\n", result.output());
+                var origin = (options.getFirst().equals("--class-path") ? "" : "sample.module/") + "modular.api(ordered-" + index + ".jar)";
+                assertEquals(origin + ": @Deprecated package modular.api;\n", result.output());
             }
         }
     }
@@ -1684,7 +1686,7 @@ class ClassQueryTest {
                 "none", "--kind", "module", "example");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertEquals("example: module example { exports com.example; }\n", result.output());
+        assertEquals("example(example.jar): module example { exports com.example; }\n", result.output());
     }
 
     @Test
@@ -1712,7 +1714,7 @@ class ClassQueryTest {
         var result = run("-s", "none", "java.lang.String.isEmpty");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertEquals("java.lang.String: public boolean isEmpty() { /* body omitted */ }\n", result.output());
+        assertEquals(JAVA_BASE + "java.lang.String: public boolean isEmpty() { /* body omitted */ }\n", result.output());
     }
 
     @Test
@@ -1721,7 +1723,7 @@ class ClassQueryTest {
 
         assertEquals(0, result.exitCode(), result.error());
         assertEquals(
-                "java.util.Collections: public static final <T> List<T> emptyList() { /* body omitted */ }\n",
+                JAVA_BASE + "java.util.Collections: public static final <T> List<T> emptyList() { /* body omitted */ }\n",
                 result.output());
     }
 
@@ -1731,7 +1733,7 @@ class ClassQueryTest {
 
         assertEquals(0, result.exitCode(), result.error());
         assertEquals(
-                "java.util.List: public abstract interface List<E> extends SequencedCollection<E> {\n",
+                JAVA_BASE + "java.util.List: public abstract interface List<E> extends SequencedCollection<E> {\n",
                 result.output());
     }
 
@@ -1742,7 +1744,7 @@ class ClassQueryTest {
 
         assertEquals(0, result.exitCode(), result.error());
         assertEquals(
-                "class java.util.List\n" + "public abstract interface List<E> extends SequencedCollection<E> {\n",
+                "class " + JAVA_BASE + "java.util.List\n" + "public abstract interface List<E> extends SequencedCollection<E> {\n",
                 result.output());
     }
 
@@ -1830,7 +1832,7 @@ class ClassQueryTest {
         var result = run("--class-path", JAR.toString(), "com.example.Example");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertTrue(result.output().contains("com.example.Example: public int run(int amount)"),
+        assertTrue(result.output().contains("com.example.Example(example.jar): public int run(int amount)"),
                 result.output());
     }
 
@@ -1912,7 +1914,7 @@ class ClassQueryTest {
                 "--source", "definition", "com.example.Example.run");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertTrue(result.output().contains("com.example.Example(Example.java:10):"),
+        assertTrue(result.output().contains("com.example.Example(example.jar!/Example.java:10):"),
                 result.output());
         assertTrue(result.output().contains("return amount + 1;"),
                 result.output());
@@ -1981,7 +1983,7 @@ class ClassQueryTest {
                 NON_JAVA_SOURCE_JAR.toString(), "--source", "definition", "com.example.Example.run");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertTrue(result.output().contains("com.example.Example: public int run(int amount)"),
+        assertTrue(result.output().contains("com.example.Example(example-non-java.jar): public int run(int amount)"),
                 result.output());
         assertFalse(result.output().contains("Example.kt:"),
                 result.output());
@@ -2098,7 +2100,7 @@ class ClassQueryTest {
         assertEquals(1, results.size(), result.output());
         var row = results.getFirst();
         var text = row.get("text").asString();
-        assertTrue(text.contains("com.example.Example: public int run"), text);
+        assertTrue(text.contains("com.example.Example(example.jar): public int run"), text);
         assertFalse(text.contains("jar:file:"), text);
         var origin = row.get("origin");
         assertEquals("archive", origin.get("kind").asString());
@@ -2110,7 +2112,7 @@ class ClassQueryTest {
         var result = run("--class-path", JAR.toString(), "com.example.Example");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertTrue(result.output().contains("com.example.Example: public int run(int amount)"),
+        assertTrue(result.output().contains("com.example.Example(example.jar): public int run(int amount)"),
                 result.output());
     }
 

@@ -185,8 +185,8 @@ class RelationshipQueryTest {
         var result = run("--class-path", archive.toString(), "--exclude-system-modules", "--subtypes", "example.Root");
 
         assertSuccess(result);
-        assertEquals(List.of("class example.Leaf", "class example.Other", "interface example.Branch",
-                "class example.Base", "class example.Inherited"), result.output().lines().toList());
+        assertEquals(List.of("class example.Leaf(ordered.jar)", "class example.Other(ordered.jar)", "interface example.Branch(ordered.jar)",
+                "class example.Base(ordered.jar)", "class example.Inherited(ordered.jar)"), result.output().lines().toList());
     }
 
     @Test
@@ -313,7 +313,7 @@ class RelationshipQueryTest {
                      .distinct()
                      .count());
         assertTrue(lines.contains("interface example.Root"), result.output());
-        assertTrue(lines.contains("class java.lang.Object"), result.output());
+        assertTrue(lines.contains("class java.base@" + Object.class.getModule().getDescriptor().rawVersion().orElseThrow() + "/java.lang.Object"), result.output());
         assertTrue(lines.contains("class example.Leaf"), result.output());
         assertFalse(result.output().contains("Unrelated"),
                 result.output());
@@ -621,7 +621,7 @@ class RelationshipQueryTest {
             var replacement = run("--class-path", path, "--exclude-system-modules", "--subtypes", "example.Unrelated");
             assertSuccess(replacement);
             assertEquals(first.equals(archive)
-                            ? List.of("class example.Base", "class example.Inherited", "class example.Leaf") : List.of(),
+                            ? List.of("class example.Base(replacement.jar)", "class example.Inherited", "class example.Leaf") : List.of(),
                     replacement.output().lines().sorted().toList());
         }
     }
@@ -745,7 +745,7 @@ class RelationshipQueryTest {
                 "--overrides",
                 "example.api.Contract.run");
         assertSuccess(result);
-        assertEquals("method example.impl.Implementation.run()\n", result.output());
+        assertEquals("method implementation/example.impl.Implementation.run()\n", result.output());
     }
 
     @Test

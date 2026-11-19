@@ -29,9 +29,11 @@ import com.sun.source.tree.Tree;
 import com.sun.source.util.TreePathScanner;
 
 final class ReferencedTypes {
+    private record ReferencedType(SymbolKind kind, Output.SymbolLocation location) {}
+
     static void list(Options options, SearchEnvironment environment, PrintWriter out) throws IOException, ToolException {
         var target = options.referencedTypes();
-        var results = new LinkedHashMap<String, SymbolKind>();
+        var results = new LinkedHashMap<String, ReferencedType>();
         if (DeclarationSearch.simpleNameTarget(target)
                 || !target.endsWith(".java") && !target.endsWith(".class") && !environment.classTargetExists(target)) {
             var selected = options.targetSearch(target, Set.of(SymbolKind.TYPE));
@@ -44,12 +46,12 @@ final class ReferencedTypes {
         } else {
             collect(options, environment, target, results);
         }
-        results.forEach((name, kind) -> out.println(kind.optionName() + " " + name));
+        results.forEach((name, type) -> ((Output.SymbolOutput) out).symbol(type.kind(), name, type.location(), null));
         out.flush();
     }
 
     private static void collect(Options options, SearchEnvironment environment, String target,
-            Map<String, SymbolKind> results) throws IOException, ToolException {
+            Map<String, ReferencedType> results) throws IOException, ToolException {
         var file = Path.of(target).toAbsolutePath().normalize();
         Path sourceFile = null;
         SearchEnvironment.ResolvedClass compiled;
@@ -88,12 +90,13 @@ final class ReferencedTypes {
                         var kind = SymbolKind.classKind(model);
                         if ((options.kinds().isEmpty() || options.kinds().contains(SymbolKind.TYPE) || options.kinds().contains(kind))
                                 && (options.visibility() == null || options.visibility().visible(ClassFileRenderer.listedClassFlags(model)))) {
-                            results.putIfAbsent(name, kind);
+                            results.putIfAbsent(name, new ReferencedType(kind, new Output.SymbolLocation(referenced.location(), null,
+                                    model.findAttribute(Attributes.sourceFile()).map(attribute -> attribute.sourceFile().stringValue()).orElse(null))));
                         }
                     } else {
                         var type = analysis.elements().getTypeElement(name);
                         if (type == null) throw new ToolException(2, "Cannot resolve referenced type: " + name);
-                        add(options, type, results);
+                        add(options, type, analysis, results);
                     }
                 }
                 if (options.source() != SourceScope.NONE) {
@@ -127,7 +130,7 @@ final class ReferencedTypes {
     }
 
     private static void supplement(Options options, SearchEnvironment environment, SourceUnit source, String binaryName,
-            String moduleName, Map<String, SymbolKind> results) throws IOException, ToolException {
+            String moduleName, Map<String, ReferencedType> results) throws IOException, ToolException {
         try (var analysis = JavaAnalysis.openAttached(environment, source, binaryName, moduleName)) {
             for (var unit : analysis.units()) {
                 new Scanner(options, analysis, unit, results).scan(unit, null);
@@ -138,9 +141,9 @@ final class ReferencedTypes {
         }
     }
 
-    private static void add(Options options, TypeElement type, Map<String, SymbolKind> results) {
+    private static void add(Options options, TypeElement type, JavaAnalysis analysis, Map<String, ReferencedType> results) throws IOException {
         var name = type.getQualifiedName().toString();
-        if (name.isEmpty()) return;
+        if (name.isEmpty() || results.containsKey(name)) return;
         var kind = switch (type.getKind()) {
             case CLASS -> SymbolKind.CLASS;
             case INTERFACE -> SymbolKind.INTERFACE;
@@ -151,16 +154,16 @@ final class ReferencedTypes {
         };
         if (!options.kinds().isEmpty() && !options.kinds().contains(SymbolKind.TYPE) && !options.kinds().contains(kind)) return;
         if (options.visibility() != null && !options.visibility().visibleModifiers(type.getModifiers(), false)) return;
-        results.putIfAbsent(name, kind);
+        results.putIfAbsent(name, new ReferencedType(kind, analysis.typeLocation(type)));
     }
 
     private static final class Scanner extends TreePathScanner<Void, Void> {
         private final Options options;
         private final JavaAnalysis analysis;
         private final CompilationUnitTree unit;
-        private final Map<String, SymbolKind> results;
+        private final Map<String, ReferencedType> results;
 
-        Scanner(Options options, JavaAnalysis analysis, CompilationUnitTree unit, Map<String, SymbolKind> results) {
+        Scanner(Options options, JavaAnalysis analysis, CompilationUnitTree unit, Map<String, ReferencedType> results) {
             this.options = options;
             this.analysis = analysis;
             this.unit = unit;
@@ -202,7 +205,11 @@ final class ReferencedTypes {
         }
 
         private void emit(TypeElement type) {
-            add(options, type, results);
+            try {
+                add(options, type, analysis, results);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
         }
     }
 }

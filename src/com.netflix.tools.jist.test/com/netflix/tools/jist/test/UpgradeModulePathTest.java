@@ -77,7 +77,7 @@ class UpgradeModulePathTest {
             var result = run("--upgrade-module-path", UPGRADE.toString(), "--module-path", MODULES.toString(),
                     selection, "java.logging", "--source", "none", "--kind", "type", "-l", "upgrade.api");
             assertEquals(0, result.code(), result.error());
-            assertEquals("class upgrade.api.Replacement\n", result.output());
+            assertEquals("class java.logging/upgrade.api.Replacement\n", result.output());
             var original = run("--upgrade-module-path", UPGRADE.toString(), selection, "java.logging", "--source", "none",
                     "--kind", "type", "-l", "java.util.logging");
             assertEquals(1, original.code(), original.error());
@@ -91,7 +91,7 @@ class UpgradeModulePathTest {
         var result = run("--module-path", MODULES.toString(), "--module", "java.logging", "--source", "none", "-l",
                 "--kind", "type", "java.util.logging.Logger");
         assertEquals(0, result.code(), result.error());
-        assertEquals("class java.util.logging.Logger\n", result.output());
+        assertEquals("class java.logging@" + java.lang.module.ModuleFinder.ofSystem().find("java.logging").orElseThrow().descriptor().rawVersion().orElseThrow() + "/java.util.logging.Logger\n", result.output());
         var masked = run("--module-path", MODULES.toString(), "--module", "java.logging", "--source", "none", "-l",
                 "--kind", "type", "upgrade.api.Fallback");
         assertEquals(1, masked.code(), masked.output());
@@ -102,7 +102,7 @@ class UpgradeModulePathTest {
         var result = run("--upgrade-module-path", UPGRADE.toString(), "--module", "java.logging",
                 "--source", "none", "-l", "--callers", "java.lang.String.repeat");
         assertEquals(0, result.code(), result.error());
-        assertTrue(result.output().contains("method upgrade.api.Replacement.caller()\n"), result.output());
+        assertTrue(result.output().contains("method java.logging/upgrade.api.Replacement.caller()\n"), result.output());
         assertFalse(result.output().contains("java.util.logging"), result.output());
     }
 
@@ -112,7 +112,7 @@ class UpgradeModulePathTest {
                 "--module", "application", "--limit-modules", "java.base,java.logging,application",
                 "--source", "none", "-l", "--callers", "upgrade.api.Replacement.target");
         assertEquals(0, result.code(), result.error());
-        assertEquals("method application.Caller.run()\n", result.output());
+        assertEquals("method application/application.Caller.run()\n", result.output());
     }
 
     @Test
@@ -139,7 +139,7 @@ class UpgradeModulePathTest {
         var result = run("--module-path", jars.toString(), "--upgrade-module-path", upgraded.toString(), "--module", "hash.application",
                 "--limit-modules", "java.base,hash.base,hash.application", "--source", "none", "--kind", "type", "-l", "hash.api");
         assertEquals(0, result.code(), result.error());
-        assertEquals("class hash.api.Replacement\n", result.output());
+        assertEquals("class hash.application/hash.api.Replacement\n", result.output());
     }
 
     private static void compile(Path sources, Path output, List<String> options) throws Exception {

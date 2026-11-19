@@ -33,6 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ReferencedTypesTest {
+    private static final String JAVA_BASE = "java.base@" + Object.class.getModule().getDescriptor().rawVersion().orElseThrow() + "/";
     @TempDir Path directory;
 
     @Test
@@ -48,7 +49,7 @@ class ReferencedTypesTest {
                 """);
         var result = run(file);
         success(result);
-        assertEquals(List.of("interface java.util.List", "interface java.nio.file.Path"), result.output().lines().toList());
+        assertEquals(List.of("interface " + JAVA_BASE + "java.util.List", "interface " + JAVA_BASE + "java.nio.file.Path"), result.output().lines().toList());
         assertEquals(result.output(), run(file, "-l").output());
     }
 
@@ -64,10 +65,10 @@ class ReferencedTypesTest {
         var result = run(file);
         success(result);
         var rows = result.output().lines().toList();
-        assertTrue(rows.contains("class java.lang.Number"), result.output());
-        assertTrue(rows.contains("interface java.util.Map.Entry"), result.output());
-        assertTrue(rows.contains("class java.lang.String"), result.output());
-        assertTrue(rows.contains("class java.lang.Class"), result.output());
+        assertTrue(rows.contains("class " + JAVA_BASE + "java.lang.Number"), result.output());
+        assertTrue(rows.contains("interface " + JAVA_BASE + "java.util.Map.Entry"), result.output());
+        assertTrue(rows.contains("class " + JAVA_BASE + "java.lang.String"), result.output());
+        assertTrue(rows.contains("class " + JAVA_BASE + "java.lang.Class"), result.output());
         assertEquals(rows.size(), rows.stream().distinct().count());
         assertFalse(result.output().contains("java.lang.Object"), result.output());
     }
@@ -83,8 +84,8 @@ class ReferencedTypesTest {
                 """);
         var result = run(file);
         success(result);
-        assertTrue(result.output().contains("class java.util.Collections\n"), result.output());
-        assertTrue(result.output().contains("enum java.util.concurrent.TimeUnit\n"), result.output());
+        assertTrue(result.output().contains("class " + JAVA_BASE + "java.util.Collections\n"), result.output());
+        assertTrue(result.output().contains("enum " + JAVA_BASE + "java.util.concurrent.TimeUnit\n"), result.output());
         assertFalse(result.output().contains("java.util.List"), result.output());
     }
 
@@ -109,11 +110,11 @@ class ReferencedTypesTest {
                 """);
         var result = run(file);
         success(result);
-        assertTrue(result.output().contains("annotation java.lang.Deprecated\n"), result.output());
-        assertTrue(result.output().contains("enum java.time.DayOfWeek\n"), result.output());
-        assertTrue(result.output().contains("interface java.lang.Runnable\n"), result.output());
+        assertTrue(result.output().contains("annotation " + JAVA_BASE + "java.lang.Deprecated\n"), result.output());
+        assertTrue(result.output().contains("enum " + JAVA_BASE + "java.time.DayOfWeek\n"), result.output());
+        assertTrue(result.output().contains("interface " + JAVA_BASE + "java.lang.Runnable\n"), result.output());
         assertFalse(result.output().contains("java.lang.Record"), result.output());
-        assertEquals("enum java.time.DayOfWeek\n", run(file, "--kind", "enum").output());
+        assertEquals("enum " + JAVA_BASE + "java.time.DayOfWeek\n", run(file, "--kind", "enum").output());
     }
 
     @Test
@@ -148,7 +149,7 @@ class ReferencedTypesTest {
         var result = run(file, "--module-source-path", directory.resolve("src").toString(), "--module", "application",
                 "--limit-modules", "java.base,application,library");
         success(result);
-        assertEquals("class example.api.Dependency\n", result.output());
+        assertEquals("class library/example.api.Dependency\n", result.output());
         try (var files = Files.walk(directory)) {
             assertFalse(files.anyMatch(path -> path.toString().endsWith(".class")));
         }
@@ -181,9 +182,9 @@ class ReferencedTypesTest {
                 """);
         var result = run(file);
         success(result);
-        assertTrue(result.output().contains("annotation java.lang.annotation.Retention\n"), result.output());
-        assertTrue(result.output().contains("enum java.lang.annotation.RetentionPolicy\n"), result.output());
-        assertTrue(result.output().contains("interface java.nio.file.Path\n"), result.output());
+        assertTrue(result.output().contains("annotation " + JAVA_BASE + "java.lang.annotation.Retention\n"), result.output());
+        assertTrue(result.output().contains("enum " + JAVA_BASE + "java.lang.annotation.RetentionPolicy\n"), result.output());
+        assertTrue(result.output().contains("interface " + JAVA_BASE + "java.nio.file.Path\n"), result.output());
         assertTrue(result.output().contains("annotation Marker\n"), result.output());
     }
 
@@ -202,11 +203,11 @@ class ReferencedTypesTest {
         var classes = compile(file);
         var result = run(classes.resolve("example/Example.class"), "--class-path", classes.toString());
         success(result);
-        assertTrue(result.output().contains("interface java.util.List\n"), result.output());
-        assertTrue(result.output().contains("interface java.nio.file.Path\n"), result.output());
-        assertTrue(result.output().contains("class java.lang.String\n"), result.output());
-        assertTrue(result.output().contains("class java.io.IOException\n"), result.output());
-        assertTrue(result.output().contains("annotation java.lang.Deprecated\n"), result.output());
+        assertTrue(result.output().contains("interface " + JAVA_BASE + "java.util.List\n"), result.output());
+        assertTrue(result.output().contains("interface " + JAVA_BASE + "java.nio.file.Path\n"), result.output());
+        assertTrue(result.output().contains("class " + JAVA_BASE + "java.lang.String\n"), result.output());
+        assertTrue(result.output().contains("class " + JAVA_BASE + "java.io.IOException\n"), result.output());
+        assertTrue(result.output().contains("annotation " + JAVA_BASE + "java.lang.Deprecated\n"), result.output());
         assertFalse(result.output().contains("not.a.RealClass"), result.output());
         assertFalse(result.output().contains("class example.Example"), result.output());
         assertEquals(result.output(), run(Path.of("example.Example"), "--class-path", classes.toString()).output());
@@ -230,8 +231,8 @@ class ReferencedTypesTest {
         }
         var result = run(Path.of("Example"), pathOption, input.toString());
         success(result);
-        assertTrue(result.output().contains("interface java.nio.file.Path\n"), result.output());
-        assertTrue(result.output().contains("interface java.util.List\n"), result.output());
+        assertTrue(result.output().contains("interface " + JAVA_BASE + "java.nio.file.Path\n"), result.output());
+        assertTrue(result.output().contains("interface " + JAVA_BASE + "java.util.List\n"), result.output());
         assertEquals(result.output().lines().count(), result.output().lines().distinct().count());
         for (var name : List.of("first.Example", "second.Example")) {
             var qualified = run(Path.of(name), pathOption, input.toString());
@@ -245,7 +246,7 @@ class ReferencedTypesTest {
         source("example/Outer.java", "package example; public class Outer { public static class Nested { java.nio.file.Path path; } }");
         var result = run(Path.of("Nested"), "--source-path", directory.toString());
         success(result);
-        assertEquals("interface java.nio.file.Path\n", result.output());
+        assertEquals("interface " + JAVA_BASE + "java.nio.file.Path\n", result.output());
     }
 
     @Test
@@ -264,7 +265,7 @@ class ReferencedTypesTest {
         var result = run(Path.of("Example"), "--class-path", classes.toString(), "--source", "none",
                 "--exclude-application-classes", "--exclude-system-modules", "--exclude-path", classes.toString());
         success(result);
-        assertTrue(result.output().contains("interface java.nio.file.Path\n"), result.output());
+        assertTrue(result.output().contains("interface " + JAVA_BASE + "java.nio.file.Path\n"), result.output());
     }
 
     @Test
@@ -286,7 +287,7 @@ class ReferencedTypesTest {
         }
         var withSource = run(Path.of("example.Example"), "--class-path", classes.toString(), "--source-path", sources.toString());
         success(withSource);
-        assertTrue(withSource.output().contains("annotation java.lang.SuppressWarnings\n"), withSource.output());
+        assertTrue(withSource.output().contains("annotation " + JAVA_BASE + "java.lang.SuppressWarnings\n"), withSource.output());
         assertTrue(withoutSource.output().lines().allMatch(withSource.output()::contains), withSource.output());
         var none = run(Path.of("example.Example"), "--class-path", classes.toString(), "--source-path", sources.toString(), "--source", "none");
         success(none);
@@ -300,7 +301,7 @@ class ReferencedTypesTest {
         Files.writeString(file, "package example; public class Example { Missing missing; }");
         var result = run(file, "--class-path", classes.toString());
         success(result);
-        assertTrue(result.output().contains("interface java.nio.file.Path\n"), result.output());
+        assertTrue(result.output().contains("interface " + JAVA_BASE + "java.nio.file.Path\n"), result.output());
     }
 
     @Test
@@ -315,7 +316,7 @@ class ReferencedTypesTest {
         }
         var classpath = run(Path.of("example.Example"), "--class-path", jar.toString(), "--source", "none");
         success(classpath);
-        assertTrue(classpath.output().contains("interface java.nio.file.Path\n"), classpath.output());
+        assertTrue(classpath.output().contains("interface " + JAVA_BASE + "java.nio.file.Path\n"), classpath.output());
         var descriptor = source("module-info.java", "module example.module { exports example; }");
         var modules = directory.resolve("modules");
         assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null, "-g:none", "-d", modules.toString(), descriptor.toString(), file.toString()));
@@ -326,7 +327,7 @@ class ReferencedTypesTest {
         var enriched = run(Path.of("example.Example"), "--module-path", modules.toString(), "--module", "example.module",
                 "--limit-modules", "java.base,example.module", "--source-path", directory.toString());
         success(enriched);
-        assertTrue(enriched.output().contains("annotation java.lang.SuppressWarnings\n"), enriched.output());
+        assertTrue(enriched.output().contains("annotation " + JAVA_BASE + "java.lang.SuppressWarnings\n"), enriched.output());
     }
 
     @Test
@@ -341,7 +342,7 @@ class ReferencedTypesTest {
         assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null, "-g", "-d", classes.toString(), file.toString()));
         var result = run(Path.of("example.Example"), "--class-path", classes.toString(), "--source", "none");
         success(result);
-        assertTrue(result.output().contains("interface java.nio.file.Path\n"), result.output());
+        assertTrue(result.output().contains("interface " + JAVA_BASE + "java.nio.file.Path\n"), result.output());
     }
 
     private Path compile(Path file) {

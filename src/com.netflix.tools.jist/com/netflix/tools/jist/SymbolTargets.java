@@ -60,7 +60,7 @@ final class SymbolTargets extends PrintWriter implements Output.SymbolOutput {
     }
 
     @Override
-    public void symbol(SymbolKind kind, String name, String location) {
+    public void symbol(SymbolKind kind, String name, Output.SymbolLocation location, Output.SourceRange source) {
         if (kind != SymbolKind.METHOD && kind != SymbolKind.FIELD && !kind.isType()) {
             return;
         }

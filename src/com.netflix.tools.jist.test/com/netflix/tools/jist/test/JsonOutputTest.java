@@ -71,7 +71,7 @@ class JsonOutputTest {
                 assertEquals(Path.of(System.getProperty("java.home")).toAbsolutePath().normalize().toString(), origin.get("system").asString());
                 assertTrue(origin.get("location").asString().contains("sources.zip!/"), result.output());
                 assertTrue(origin.get("resource").asString().endsWith(".class"));
-                var prefix = "java.base@" + origin.get("version").asString() + "/";
+                var prefix = "java.base@" + origin.get("version").asString() + (kind.equals("module") ? "(" : "/");
                 assertTrue(row.get("text").asString().startsWith(prefix), result.output());
             }
         }

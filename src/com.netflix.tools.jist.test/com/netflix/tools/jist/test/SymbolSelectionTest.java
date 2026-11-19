@@ -40,6 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SymbolSelectionTest {
+    private static final String JAVA_BASE = "java.base@" + Object.class.getModule().getDescriptor().rawVersion().orElseThrow() + "/";
     private static final Path ROOT = Path.of("build/test-symbol-selection");
     private static final Path SOURCES = ROOT.resolve("src");
     private static final Path CLASSES = ROOT.resolve("classes");
@@ -238,7 +239,7 @@ class SymbolSelectionTest {
     void resolvesSecondarySourceTypesWithLiteralOrEscapedNames(String name) {
         var result = run("source", List.of("--referenced-types"), "sample." + name);
         assertEquals(0, result.status(), result.error());
-        assertTrue(result.output().contains("class java.lang.String"), result.output());
+        assertTrue(result.output().contains("class " + JAVA_BASE + "java.lang.String"), result.output());
     }
 
     @ParameterizedTest
@@ -249,7 +250,7 @@ class SymbolSelectionTest {
     void resolvesSystemTypeSuffixesIncludingNestedTypes(String target, String expected) {
         var result = run("source", List.of("--referenced-types"), target);
         assertEquals(0, result.status(), result.error());
-        assertTrue(result.output().contains(expected), result.output());
+        assertTrue(result.output().contains(expected.replace("java.", JAVA_BASE + "java.")), result.output());
     }
 
     @ParameterizedTest
@@ -271,7 +272,7 @@ class SymbolSelectionTest {
     void resolvesSourceTypeNamesContainingDollarSigns() {
         var exact = run("source", List.of("--referenced-types"), "sample.Dollar$Selection");
         assertEquals(0, exact.status(), exact.error());
-        assertTrue(exact.output().contains("class java.lang.String"), exact.output());
+        assertTrue(exact.output().contains("class " + JAVA_BASE + "java.lang.String"), exact.output());
         var result = run("source", List.of("--referenced-types"), "Dollar$Selection");
         assertEquals(0, result.status(), result.error());
         assertEquals(exact.output(), result.output());

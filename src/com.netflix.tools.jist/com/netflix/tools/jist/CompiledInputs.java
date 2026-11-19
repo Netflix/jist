@@ -291,6 +291,10 @@ final class CompiledInputs {
             return jar != null;
         }
 
+        String location() {
+            return origin != null ? origin : SearchEnvironment.unitLocation(path);
+        }
+
         private ClassInput input(JarEntry entry) throws IOException {
             if (archive == null) {
                 // Only selected entries need zipfs paths for parallel positional reads.

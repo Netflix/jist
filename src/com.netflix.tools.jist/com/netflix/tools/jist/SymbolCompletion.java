@@ -73,7 +73,7 @@ final class SymbolCompletion {
         }
 
         @Override
-        public void symbol(SymbolKind kind, String name, String location) {
+        public void symbol(SymbolKind kind, String name, Output.SymbolLocation location, Output.SourceRange source) {
             String value = withoutParameters(name);
             if (value.startsWith(current) || terminalName(value).startsWith(current)) {
                 completions.putIfAbsent(value, new Completion(value, kind.optionName()));

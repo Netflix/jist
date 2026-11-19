@@ -109,7 +109,9 @@ final class DeclarationSearch {
 
     private record ListedSymbol(SymbolKind kind, String unitName, String name, String declaration) {}
 
-    private static final class OrderedClassFiles extends OrderedReads<List<ListedSymbol>> {
+    private record ListedClass(List<ListedSymbol> symbols, Output.SymbolLocation location) {}
+
+    private static final class OrderedClassFiles extends OrderedReads<ListedClass> {
         private final Options options;
         private final Visibility visibility;
         private final SourceLookup sources;
@@ -117,7 +119,7 @@ final class DeclarationSearch {
 
         OrderedClassFiles(PrintWriter out, Options options, Visibility visibility,
                          Set<String> emittedPackages, SourceLookup sources, ExecutorService executor) {
-            super(executor, symbols -> addListedClassSymbols(out, symbols, emittedPackages));
+            super(executor, result -> addListedClassSymbols(out, result.symbols(), emittedPackages, result.location()));
             this.options = options;
             this.visibility = visibility;
             this.sources = sources;
@@ -126,11 +128,17 @@ final class DeclarationSearch {
 
         void submit(ClassInput input, String className) throws IOException, ToolException {
             if (!options.requiresClassModel(className)) {
-                add(prepareListedClass(input.resource(), className, null, options, visibility, sources, listOnly));
+                add(prepare(input, className, null));
             } else {
-                submit(() -> prepareListedClass(input.resource(), className, CLASS_FILE.parse(input.read()),
-                        options, visibility, sources, listOnly));
+                submit(() -> prepare(input, className, CLASS_FILE.parse(input.read())));
             }
+        }
+
+        private ListedClass prepare(ClassInput input, String className, ClassModel model) {
+            var sourceFile = model == null ? null
+                    : model.findAttribute(Attributes.sourceFile()).map(attribute -> attribute.sourceFile().stringValue()).orElse(null);
+            return new ListedClass(prepareListedClass(input.resource(), className, model, options, visibility, sources, listOnly),
+                    new Output.SymbolLocation(input.get(), null, sourceFile));
         }
     }
 
@@ -197,11 +205,14 @@ final class DeclarationSearch {
                     if (!environment.searches(module)) {
                         continue;
                     }
+                    var moduleLocation = Files.isDirectory(module.location()) ? unitLocation(module.location())
+                            : "jar:" + module.location().toAbsolutePath().normalize().toUri() + "!/";
                     if (relationships == null
                             && module.descriptor().isAutomatic()
                             && (opts.kinds().isEmpty() || opts.listsModules())
                             && matchesListedPrefix(opts, module.name())) {
-                        if (!printListSymbol(out, SymbolKind.MODULE, module.name(), unitLocation(module.location()))) {
+                        if (!printListSymbol(out, SymbolKind.MODULE, module.name(), moduleLocation)) {
+                            if (out instanceof OriginOutput output) output.classOrigin(module.name(), moduleLocation);
                             out.println(module.name() + ": " + renderAutomaticModuleDeclaration(module.descriptor()));
                         }
                     }
@@ -224,7 +235,7 @@ final class DeclarationSearch {
                                 .sorted()
                                 .toList()) {
                             if (emittedPackages.add(packageName) && matchesListedPrefix(opts, packageName)) {
-                                emitPackageSourceContext(opts, out, packageName, null, unitLocation(module.location()),
+                                emitPackageSourceContext(opts, out, packageName, null, moduleLocation,
                                         sources, emittedSources);
                             }
                         }
@@ -845,7 +856,7 @@ final class DeclarationSearch {
                     }
                     classes.finish();
                 }
-                emitSynthesizedPackages(out, opts, exportedPackages, emittedPackages);
+                emitSynthesizedPackages(out, opts, exportedPackages, emittedPackages, unitLocation(module.resolve("module-info.class")));
             }
         }
     }
@@ -875,7 +886,7 @@ final class DeclarationSearch {
     }
 
     private static void emitSynthesizedPackages(PrintWriter out, Options opts, Collection<String> packages,
-            Set<String> emittedPackages) {
+            Set<String> emittedPackages, String location) {
         if (!opts.listsPackages()) {
             return;
         }
@@ -883,7 +894,8 @@ final class DeclarationSearch {
                 .sorted()
                 .forEach(packageName -> {
                     if (emittedPackages.add(packageName) && matchesListedPrefix(opts, packageName)) {
-                        if (!printListSymbol(out, SymbolKind.PACKAGE, packageName, null)) {
+                        if (!printListSymbol(out, SymbolKind.PACKAGE, packageName, location)) {
+                            if (out instanceof OriginOutput output) output.classOrigin(packageName, location);
                             out.println(packageName + ": package " + packageName + ";");
                         }
                     }
@@ -898,19 +910,20 @@ final class DeclarationSearch {
             if (!environment.searches(module)) {
                 continue;
             }
-            if (module.descriptor().isAutomatic() && opts.listsModules() && matchesListedPrefix(opts, module.name())) {
-                if (!printListSymbol(out, SymbolKind.MODULE, module.name(), null)) {
-                    out.println(module.name() + ": " + renderAutomaticModuleDeclaration(module.descriptor()));
-                }
-            }
             try (var root = CompiledInputs.Root.open(entry);
                  var classes = new OrderedClassFiles(out, opts, visibility, emittedPackages, sources, executor)) {
+                if (module.descriptor().isAutomatic() && opts.listsModules() && matchesListedPrefix(opts, module.name())) {
+                    if (!printListSymbol(out, SymbolKind.MODULE, module.name(), root.location())) {
+                        if (out instanceof OriginOutput output) output.classOrigin(module.name(), root.location());
+                        out.println(module.name() + ": " + renderAutomaticModuleDeclaration(module.descriptor()));
+                    }
+                }
                 root.forEach(true, resource -> includesClassResource(opts, resource, selectedResources)
                                 && module.visibleResource(resource),
                         input -> classes.submit(input, listedClassName(input.resource())));
                 classes.finish();
+                emitSynthesizedPackages(out, opts, module.visiblePackages(), emittedPackages, root.location());
             }
-            emitSynthesizedPackages(out, opts, module.visiblePackages(), emittedPackages);
         }
     }
 
@@ -937,7 +950,7 @@ final class DeclarationSearch {
                             var task = (JavacTask) compiler.getTask(null, fileManager, null, List.of("-proc:none"), null, List.of(file));
                             var units = task.parse().iterator();
                             if (units.hasNext()) {
-                                var positions = opts.listOnly() && opts.format() == OutputFormat.JSON
+                                var positions = opts.listOnly()
                                         ? Trees.instance(task).getSourcePositions()
                                         : null;
                                 new SourceSymbolScanner(
@@ -1007,6 +1020,11 @@ final class DeclarationSearch {
     }
 
     private static void addListedClassSymbols(PrintWriter out, List<ListedSymbol> symbols, Set<String> emittedPackages) {
+        addListedClassSymbols(out, symbols, emittedPackages, new Output.SymbolLocation(null, null, null));
+    }
+
+    private static void addListedClassSymbols(PrintWriter out, List<ListedSymbol> symbols, Set<String> emittedPackages,
+            Output.SymbolLocation location) {
         if (symbols == null) {
             return;
         }
@@ -1014,7 +1032,10 @@ final class DeclarationSearch {
             if (symbol.kind() == SymbolKind.PACKAGE && !emittedPackages.add(symbol.name())) {
                 continue;
             }
-            if (!printListSymbol(out, symbol.kind(), symbol.name(), null)) {
+            if (out instanceof SymbolOutput output && output.listOnly()) {
+                output.symbol(symbol.kind(), symbol.name(), location, null);
+            } else {
+                if (out instanceof OriginOutput output) output.classOrigin(symbol.unitName(), location.classLocation());
                 out.println(symbol.unitName() + ": " + symbol.declaration());
             }
         }
@@ -1816,7 +1837,7 @@ final class DeclarationSearch {
             throw ToolException.notFound("Symbol not found: " + opts.target());
         }
         if (out instanceof SymbolOutput output && output.listOnly()) {
-            var location = source.sourceLocation() != null ? source.sourceLocation() : source.classLocation();
+            var location = new Output.SymbolLocation(source.classLocation(), source.sourceLocation(), source.sourceFileName());
             for (var match : matches.stream()
                     .sorted(Comparator.comparingInt(candidate -> {
                         int offset = candidate.attribution()

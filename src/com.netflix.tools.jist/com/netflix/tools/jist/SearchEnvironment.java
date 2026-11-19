@@ -331,7 +331,7 @@ final class SearchEnvironment implements AutoCloseable {
         }
     }
 
-    record ModuleSourceInput(Path location, Set<String> visiblePackages, List<Path> precedingPatches, boolean patch) {
+    record ModuleSourceInput(String module, Path location, Set<String> visiblePackages, List<Path> precedingPatches, boolean patch) {
         boolean includesResource(String resource) throws IOException {
             if (resource.equals("module-info.java")) return !patch;
             var slash = resource.lastIndexOf('/');
@@ -344,7 +344,7 @@ final class SearchEnvironment implements AutoCloseable {
     record ModuleResolution(List<ModuleInput> applicationModules,
                             Map<String, Set<String>> applicationPackages,
                             Map<String, Set<String>> systemPackages,
-                            Map<String, String> systemVersions) {}
+                            Map<String, java.lang.module.ModuleDescriptor> descriptors) {}
 
     List<ModuleInput> moduleInputs() throws IOException, ToolException {
         return modules().applicationModules();
@@ -388,10 +388,7 @@ final class SearchEnvironment implements AutoCloseable {
         systemNames.retainAll(observable.keySet());
         var roots = moduleRoots(opts, applicationNames, systemNames);
         if (roots.isEmpty())
-            return new ModuleResolution(List.of(),
-                                        Map.of(),
-                                        Map.of(),
-                                        Map.of());
+            return new ModuleResolution(List.of(), Map.of(), Map.of(), Map.of());
 
         java.lang.module.Configuration configuration;
         try {
@@ -456,17 +453,12 @@ final class SearchEnvironment implements AutoCloseable {
                 systems.put(module.name(), visiblePackages);
             }
         }
-        var systemVersions = systems.keySet().stream()
-                .map(systemReferences::get)
-                .filter(Objects::nonNull)
-                .filter(reference -> reference.descriptor().rawVersion().isPresent())
-                .collect(Collectors.toUnmodifiableMap(
-                        reference -> reference.descriptor().name(),
-                        reference -> reference.descriptor().rawVersion().orElseThrow().toString()));
         return new ModuleResolution(List.copyOf(applications),
                                     Map.copyOf(applicationPackages),
                                     Map.copyOf(systems),
-                                    systemVersions);
+                                    configuration.modules().stream().collect(Collectors.toUnmodifiableMap(
+                                            java.lang.module.ResolvedModule::name,
+                                            module -> module.reference().descriptor())));
     }
 
     private static Map<String, java.lang.module.ModuleReference> referencesByName(java.lang.module.ModuleFinder finder) {
@@ -898,13 +890,13 @@ final class SearchEnvironment implements AutoCloseable {
             var roots = patches.getOrDefault(module.getKey(), List.of());
             for (int i = 0; i < roots.size(); i++) {
                 var root = roots.get(i);
-                inputs.putIfAbsent(root, new ModuleSourceInput(root, visible, roots.subList(0, i), true));
+                inputs.putIfAbsent(root, new ModuleSourceInput(module.getKey(), root, visible, roots.subList(0, i), true));
             }
         }
         for (var module : modules.applicationPackages().entrySet()) {
             var visible = selectedModules(options).contains(module.getKey()) ? null : module.getValue();
             for (var root : configured.forModule(module.getKey())) {
-                inputs.putIfAbsent(root, new ModuleSourceInput(root, visible, patches.getOrDefault(module.getKey(), List.of()), false));
+                inputs.putIfAbsent(root, new ModuleSourceInput(module.getKey(), root, visible, patches.getOrDefault(module.getKey(), List.of()), false));
             }
         }
         return List.copyOf(inputs.values());

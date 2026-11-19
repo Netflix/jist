@@ -101,8 +101,7 @@ JDK classes resolve from the selected system image. `<java.home>/lib/src.zip` is
 ## Output invariants
 
 - Search output is left-anchored by the owning compilation unit, not the selected member symbol.
-- ClassFile presentation rows use `UNIT: SIGNATURE`; source rows use
-  `UNIT(SourceFile.java:LINE): SOURCE_LINE`.
+- ClassFile presentation rows use `UNIT: SIGNATURE`; source rows use `UNIT(SourceFile.java:LINE): SOURCE_LINE`. Compact provenance is included by default: named modules qualify units and listed symbols with their resolved `module@version/` identity, and archive names identify containing binaries. Class-path entries remain unnamed. Attached sources retain the defining ClassFile origin independently of their source location. Module versions, including system versions, come from the selected compilation context's resolved descriptors.
 - Redirected output keeps one complete result per line when a query can span compilation units. A
   default explicit source-file locator omits its redundant unit/file context and emits
   `LINE: SOURCE`; explicit `--heading`, `--no-heading`, or `--show-origin` retains context.
@@ -111,11 +110,10 @@ JDK classes resolve from the selected system image. `<java.home>/lib/src.zip` is
   only javac-attributed source token ranges in usage results; never infer highlights by matching text.
   ClassFile-only usages without attributed ranges and declaration output are not highlighted.
   `--format json` emits a streaming versioned envelope whose results contain complete output rows
-  and structured origins without headings, color, or blank breaks. The envelope ends with `exitCode`
+  and structured origins without headings, color, or blank breaks. Listings expose undecorated `symbol` and `kind`; presentation rows expose the owning `unit`. `origin.classLocation` preserves the defining ClassFile separately from attached-source locations. Consumers must not parse rendered text to recover identities. The envelope ends with `exitCode`
   and `diagnostics`; failed searches retain partial rows. Diagnostic kind `not_found` distinguishes
   absent targets from invalid queries and search failures (`error`), independently of the exit code.
-  `--show-origin` replaces the short source filename with its project path or archive URI, qualifies
-  compiled fallback rows with their ClassFile origin, and renders system origins in module-qualified form. `--no-line-number` removes source
+  `--show-origin` expands compact archive and source locations to their full paths or URIs while retaining module qualification. `--no-line-number` removes source
   coordinates and `--break` inserts one blank line between
   non-consecutive source matches. Output formatting must remain streaming and must not collect
   results by file.

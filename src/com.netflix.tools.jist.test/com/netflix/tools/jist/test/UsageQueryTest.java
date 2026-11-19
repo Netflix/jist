@@ -419,7 +419,7 @@ class UsageQueryTest {
                 "--source-path", COMPILED_SOURCE_JAR.toString(), "com.example.Target.run");
 
         assertEquals(0, result.exitCode(), result.error());
-        assertTrue(result.output().contains("com.example.Consumer(Consumer.java:"),
+        assertTrue(result.output().contains("com.example.Consumer(usage.jar!/Consumer.java:"),
                 result.output());
         assertTrue(result.output().contains("target.run();"),
                 result.output());
@@ -465,7 +465,7 @@ class UsageQueryTest {
 
         assertEquals(0, result.exitCode(), result.error());
         assertEquals(
-                "com.example.StaticUse(StaticUse.java:7):" + "     static final String SMALL = Target.make();\n" + "com.example.StaticUse(StaticUse.java:8):" + "     static final String LARGE = Target.make();\n",
+                "com.example.StaticUse(usage.jar!/StaticUse.java:7):" + "     static final String SMALL = Target.make();\n" + "com.example.StaticUse(usage.jar!/StaticUse.java:8):" + "     static final String LARGE = Target.make();\n",
                 result.output());
     }
 
@@ -630,7 +630,7 @@ class UsageQueryTest {
             var result = run("--usages", "--class-path", directory.resolve("empty").toString(),
                     "--module-source-path", moduleSourcePath, "--module", "example.app", "example.Task.run");
             assertEquals(0, result.exitCode(), result.error());
-            assertEquals("example.Task(Task.java:4):     public void invoke() { run(); }\n", result.output());
+            assertEquals("example.app/example.Task(Task.java:4):     public void invoke() { run(); }\n", result.output());
             assertEquals("", result.error());
         }
         try (var files = Files.walk(directory)) {

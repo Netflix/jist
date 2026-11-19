@@ -167,17 +167,25 @@ final class CallSearch implements Closeable {
             String unit, String file, String origin, int line, String site, boolean source, PrintWriter out) {
         boolean callerMatch = incoming.contains(context.key(callee)) && visible(context, caller, source);
         boolean calleeMatch = outgoing.contains(context.key(caller)) && visible(context, callee, source);
-        return edge(context.key(caller), context.signature(caller), context.key(callee), context.signature(callee),
+        return edge(context.key(caller), context.signature(caller), context, callee,
                 callerMatch, calleeMatch, unit, file, origin, line, site, out);
     }
 
-    private boolean edge(String callerKey, String callerSignature, String calleeKey, String calleeSignature,
+    private boolean edge(String callerKey, String callerSignature, JavaAnalysis context, ExecutableElement callee,
             boolean callerMatch, boolean calleeMatch, String unit, String file, String origin, int line,
             String site, PrintWriter out) {
         if (!callerMatch && !calleeMatch) return false;
+        var calleeKey = context.key(callee);
         if (options.listOnly()) {
             if (callerMatch) symbol(callerKey, callerSignature, origin, out);
-            if (calleeMatch) symbol(calleeKey, calleeSignature, origin, out);
+            if (calleeMatch && emitted.add(calleeKey) && out instanceof Output.SymbolOutput output) {
+                try {
+                    output.symbol(SymbolKind.METHOD, context.signature(callee),
+                            context.typeLocation((TypeElement) callee.getEnclosingElement()), null);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }
             return true;
         }
         if (!emitted.add(origin + ":" + site + ":" + callerKey + ":" + calleeKey)) {
@@ -188,7 +196,7 @@ final class CallSearch implements Closeable {
             if (file != null) output.sourceOrigin(unit, file, origin);
         }
         var prefix = file != null && line > 0 ? unit + "(" + file + ":" + line + "): " : unit + ": ";
-        out.println(prefix + callerSignature + " -> " + calleeSignature);
+        out.println(prefix + callerSignature + " -> " + context.signature(callee));
         return true;
     }
 
@@ -355,7 +363,7 @@ final class CallSearch implements Closeable {
                         if (location == null) {
                             location = origin.get();
                         }
-                        if (edge(callerKey, compiledSignature(name, lexical), analysis.key(callee), analysis.signature(callee),
+                        if (edge(callerKey, compiledSignature(name, lexical), analysis, callee,
                                 callerMatch, calleeMatch, unit, sourceFile, location, line,
                                 method.methodName().stringValue() + method.methodType().stringValue() + ":" + bci, out)
                                 && enrichedSource()) {

@@ -170,7 +170,51 @@ class RelationshipQueryTest {
     }
 
     @Test
-    void hierarchyDeclarationsRetainArchiveEntryOrder(@TempDir Path directory) throws Exception {
+    void resolvesExcludedNestedAncestorsAndCurrentSource(@TempDir Path directory) throws Exception {
+        var sources = Files.createDirectories(directory.resolve("src/example"));
+        var source = sources.resolve("Holder.java");
+        var parents = directory.resolve("parents");
+        var candidates = Files.createDirectories(directory.resolve("candidates/example")).getParent();
+        var text = """
+                package example;
+                public class Holder {
+                    public interface Root { void run(); }
+                    public interface Middle extends Root {}
+                    public static class Child implements Middle { public void run() {} }
+                }
+                """;
+        Files.writeString(source, text);
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        assertEquals(0, compiler.run(null, null, null, "-d", parents.toString(), source.toString()));
+        Files.move(parents.resolve("example/Holder$Child.class"), candidates.resolve("example/Holder$Child.class"));
+        var archive = directory.resolve("parents.jar");
+        writeJar(archive, parents);
+
+        for (var parentPath : List.of(parents, archive)) {
+            var options = List.of("--class-path", parentPath + File.pathSeparator + candidates,
+                    "--exclude-path", parentPath.toString(), "--exclude-system-modules");
+            var types = new ArrayList<>(options);
+            types.addAll(List.of("--subtypes", "example.Holder.Root"));
+            var subtypes = run(types.toArray(String[]::new));
+            assertSuccess(subtypes);
+            assertEquals("class example.Holder.Child\n", subtypes.output());
+            var methods = new ArrayList<>(options);
+            methods.addAll(List.of("--overrides", "example.Holder.Root.run"));
+            var overrides = run(methods.toArray(String[]::new));
+            assertSuccess(overrides);
+            assertEquals("method example.Holder.Child.run()\n", overrides.output());
+
+            Files.writeString(source, text.replace("Middle extends Root", "Middle"));
+            types.addAll(List.of("--source-path", sources.getParent().toString()));
+            var current = run(types.toArray(String[]::new));
+            assertSuccess(current);
+            assertEquals("", current.output());
+            Files.writeString(source, text);
+        }
+    }
+
+    @Test
+    void hierarchyDeclarationsRetainArchiveTraversalOrder(@TempDir Path directory) throws Exception {
         var archive = directory.resolve("ordered.jar");
         var names = List.of("Leaf", "Other", "Branch", "Base", "Inherited", "Root");
         try (var output = new JarOutputStream(Files.newOutputStream(archive))) {
@@ -184,9 +228,17 @@ class RelationshipQueryTest {
 
         var result = run("--class-path", archive.toString(), "--exclude-system-modules", "--subtypes", "example.Root");
 
+        var expected = new java.util.ArrayList<String>();
+        try (var fileSystem = java.nio.file.FileSystems.newFileSystem(archive);
+             var files = Files.walk(fileSystem.getPath("/"))) {
+            files.filter(Files::isRegularFile)
+                    .map(file -> file.getFileName().toString().replace(".class", ""))
+                    .filter(name -> !name.equals("Root"))
+                    .map(name -> (name.equals("Branch") ? "interface" : "class") + " example." + name + "(ordered.jar)")
+                    .forEach(expected::add);
+        }
         assertSuccess(result);
-        assertEquals(List.of("class example.Leaf(ordered.jar)", "class example.Other(ordered.jar)", "interface example.Branch(ordered.jar)",
-                "class example.Base(ordered.jar)", "class example.Inherited(ordered.jar)"), result.output().lines().toList());
+        assertEquals(expected, result.output().lines().toList());
     }
 
     @Test

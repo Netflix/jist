@@ -541,8 +541,14 @@ class ClassQueryTest {
                 sources.write(("package ordered;\n\npublic class " + name + " {\n    public void work() {}\n}\n")
                         .getBytes(StandardCharsets.UTF_8));
                 sources.closeEntry();
-                expected.add("ordered." + name + "(ordered.jar!/" + name + ".java:4):     public void work() {}");
             }
+        }
+        try (var fileSystem = java.nio.file.FileSystems.newFileSystem(archive);
+             var files = Files.walk(fileSystem.getPath("/"))) {
+            files.filter(Files::isRegularFile)
+                    .map(file -> file.getFileName().toString().replace(".class", ""))
+                    .map(name -> "ordered." + name + "(ordered.jar!/" + name + ".java:4):     public void work() {}")
+                    .forEach(expected::add);
         }
         List<String> directoryOrder;
         try (var files = Files.find(classes, Integer.MAX_VALUE, (_, attributes) -> attributes.isRegularFile())) {
@@ -1029,11 +1035,11 @@ class ClassQueryTest {
     void memberEnumerationWritesResultsBeforeScanningLaterClasses() throws IOException {
         var malformedJar = ROOT.resolve("malformed.jar");
         try (var jar = new JarOutputStream(Files.newOutputStream(malformedJar))) {
+            jar.putNextEntry(new JarEntry("com/example/Broken.class"));
+            jar.write(new byte[] {1, 2, 3});
+            jar.closeEntry();
             jar.putNextEntry(new JarEntry("com/example/Example.class"));
             jar.write(Files.readAllBytes(CLASS));
-            jar.closeEntry();
-            jar.putNextEntry(new JarEntry("invalid/Broken.class"));
-            jar.write(new byte[] {1, 2, 3});
             jar.closeEntry();
         }
 
@@ -1429,24 +1435,31 @@ class ClassQueryTest {
                 jar.closeEntry();
             }
         }
+        List<String> names;
+        try (var fileSystem = java.nio.file.FileSystems.newFileSystem(archive);
+             var files = Files.walk(fileSystem.getPath("/"))) {
+            names = files.filter(Files::isRegularFile)
+                    .map(file -> file.getFileName().toString().replace(".class", "")).toList();
+        }
+        var expectedMethods = names.stream().flatMap(name -> name.equals("Example")
+                ? java.util.stream.Stream.of("method com.example.Example.run(int)(members.jar)")
+                : java.util.stream.Stream.of("method com.example.Overloads.run()(members.jar)",
+                        "method com.example.Overloads.run(java.lang.String)(members.jar)",
+                        "method com.example.Overloads.run(int)(members.jar)")).toList();
+        var expectedConstructors = names.stream().map(name -> "method com.example." + name + ".new()(members.jar)").toList();
         for (var target : List.of("run", "*u*n", "*run*", "r**un")) {
             var methods = run("--system", "none", "--class-path", archive.toString(),
                     "--source", "none", "--visibility", "all", "-l", target);
             assertEquals(0, methods.exitCode(), methods.error());
             assertEquals("", methods.error());
-            assertEquals(List.of(
-                    "method com.example.Example.run(int)(members.jar)",
-                    "method com.example.Overloads.run()(members.jar)",
-                    "method com.example.Overloads.run(java.lang.String)(members.jar)",
-                    "method com.example.Overloads.run(int)(members.jar)"), methods.output().lines().toList(), target);
+            assertEquals(expectedMethods, methods.output().lines().toList(), target);
         }
         for (var target : List.of("new", "n*w", "*new*", "*n*e*w*")) {
             var constructors = run("--system", "none", "--class-path", archive.toString(),
                     "--source", "none", "--visibility", "all", "-l", target);
             assertEquals(0, constructors.exitCode(), constructors.error());
             assertEquals("", constructors.error());
-            assertEquals(List.of("method com.example.Example.new()(members.jar)", "method com.example.Overloads.new()(members.jar)"),
-                    constructors.output().lines().toList(), target);
+            assertEquals(expectedConstructors, constructors.output().lines().toList(), target);
         }
         for (var target : List.of("VALUE", "V*UE", "*VALUE*", "com.example.Example.VALUE")) {
             var fields = run("--system", "none", "--class-path", archive.toString(),

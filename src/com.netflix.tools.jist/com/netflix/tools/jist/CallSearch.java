@@ -63,6 +63,7 @@ final class CallSearch implements Closeable {
     }
 
     static CallSearch open(Options options, SearchEnvironment environment) throws IOException, ToolException {
+        environment.prepareClassPath();
         var analysis = JavaAnalysis.open(options, environment, List.of());
         try {
             var search = new CallSearch(options, environment, analysis);

@@ -93,6 +93,7 @@ final class JavaAnalysis implements Closeable {
             var units = new ArrayList<CompilationUnitTree>();
             task.parse().forEach(units::add);
             var analysis = new JavaAnalysis(manager, diagnostics, environment, task, List.copyOf(units));
+            analysis.checkDiagnostics();
             if (sourceVisibility == null) {
                 task.analyze();
             } else {
@@ -132,8 +133,9 @@ final class JavaAnalysis implements Closeable {
             var task = (JavacTask) compiler.getTask(null, taskManager, diagnostics, arguments, null, List.of(input));
             var units = new ArrayList<CompilationUnitTree>();
             task.parse().forEach(units::add);
-            task.analyze();
             var analysis = new JavaAnalysis(manager, diagnostics, environment, task, List.copyOf(units));
+            analysis.checkDiagnostics();
+            task.analyze();
             analysis.sourceOrigins = Map.of(input.toUri(), source.origin());
             analysis.checkDiagnostics();
             return analysis;

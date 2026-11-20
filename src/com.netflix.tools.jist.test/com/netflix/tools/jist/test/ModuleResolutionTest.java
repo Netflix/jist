@@ -27,6 +27,7 @@ import javax.tools.ToolProvider;
 import com.netflix.tools.jist.Jist;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.api.parallel.Resources;
 
@@ -205,6 +206,36 @@ class ModuleResolutionTest {
         var result = run("--system", System.getProperty("java.home"), "-s", "none", "java.lang.String.isEmpty");
 
         assertEquals(0, result.exitCode(), result.error());
+    }
+
+    @Test
+    void explicitSystemUsesRuntimeImageModulesWhenJmodsAreAlsoPresent(@TempDir Path directory) throws Exception {
+        var image = directory.resolve("runtime");
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var jlink = java.util.spi.ToolProvider.findFirst("jlink").orElseThrow();
+        assertEquals(0, jlink.run(new PrintWriter(output), new PrintWriter(error),
+                "--add-modules", "java.base", "--output", image.toString()), error.toString());
+        Files.createSymbolicLink(image.resolve("jmods"), Path.of(System.getProperty("java.home"), "jmods"));
+
+        var result = run("--system", image.toString(), "-l", "--kind", "module");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals("module java.base@" + Object.class.getModule().getDescriptor().rawVersion().orElseThrow() + "\n", result.output());
+        assertEquals("", result.error());
+    }
+
+    @Test
+    void explicitSystemCanReadJmodsWithoutARuntimeImage(@TempDir Path directory) throws Exception {
+        var jmods = Files.createDirectories(directory.resolve("jmods"));
+        Files.createSymbolicLink(jmods.resolve("java.base.jmod"), Path.of(System.getProperty("java.home"), "jmods", "java.base.jmod"));
+
+        var result = run("--system", directory.toString(), "--module-path", MODULES.toString(), "--module", "alpha.module",
+                "--source", "none", "-l", "--kind", "type", "beta.api.Beta");
+
+        assertEquals(0, result.exitCode(), result.error());
+        assertEquals("class beta.module/beta.api.Beta\n", result.output());
+        assertEquals("", result.error());
     }
 
     @Test

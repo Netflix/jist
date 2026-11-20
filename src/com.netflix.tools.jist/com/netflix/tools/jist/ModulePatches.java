@@ -35,23 +35,17 @@ final class ModulePatches {
         return Collections.unmodifiableMap(patches);
     }
 
-    static boolean contains(List<Path> roots, String resource) throws IOException {
+    static boolean contains(ClassPaths inputs, List<Path> roots, String resource) throws IOException {
         if (resource.equals("module-info.class") || resource.equals("module-info.java"))
             return false;
         var compiled = resource.endsWith(".java") ? resource.substring(0, resource.length() - 5) + ".class" : resource;
         var source = resource.endsWith(".class") ? resource.substring(0, resource.length() - 6) + ".java" : resource;
         int nested = source.indexOf('$');
         var unit = nested < 0 ? source : source.substring(0, nested) + ".java";
-        for (var root : roots) {
-            if (Files.isDirectory(root)) {
-                if (Files.isRegularFile(root.resolve(compiled)) || Files.isRegularFile(root.resolve(source)) || Files.isRegularFile(root.resolve(unit)))
-                    return true;
-            } else if (Files.isRegularFile(root)) {
-                try (var jar = new JarFile(root.toFile(), true, ZipFile.OPEN_READ, Runtime.version())) {
-                    if (jar.getJarEntry(compiled) != null || jar.getJarEntry(source) != null || jar.getJarEntry(unit) != null)
-                        return true;
-                }
-            }
+        for (var path : roots) {
+            var root = inputs.root(path);
+            if (root.find(compiled) != null || root.find(source) != null || root.find(unit) != null)
+                return true;
         }
         return false;
     }

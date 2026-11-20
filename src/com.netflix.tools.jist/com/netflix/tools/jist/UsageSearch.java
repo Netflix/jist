@@ -70,7 +70,6 @@ import static com.netflix.tools.jist.DeclarationSearch.enclosingTopLevelTypeAttr
 import static com.netflix.tools.jist.DeclarationSearch.warnSourceUnavailable;
 import static com.netflix.tools.jist.SearchEnvironment.parsePathList;
 import static com.netflix.tools.jist.SearchEnvironment.readsUnnamedModule;
-import static com.netflix.tools.jist.SearchEnvironment.resolveClass;
 import static com.netflix.tools.jist.SearchEnvironment.unitLocation;
 
 /** Finds semantic usages in ClassFiles and source. */
@@ -85,6 +84,7 @@ final class UsageSearch {
     private static final String JAVA_EXT = ".java";
 
     void listUsages(Options opts, PrintWriter out, PrintWriter err) throws IOException, ToolException {
+        environment.prepareClassPath();
         var query = environment.resolveSymbolSelection(opts.target());
         if (query.path().endsWith(JAVA_EXT) || query.path().endsWith(CLASS_EXT) || Files.isRegularFile(Path.of(query.path()))) {
             throw new ToolException(1, "--usages requires a class or member target");
@@ -403,7 +403,7 @@ final class UsageSearch {
             Set<String> bytecodeTypes, Set<String> bytecodeOwners, Set<BytecodeMethodKey> bytecodeMethods,
             Set<BytecodeFieldKey> bytecodeFields) throws IOException, ToolException {
         var binaryName = query.path();
-        var resolved = readsUnnamedModule(opts) ? resolveClass(binaryName, environment.classPathEntries()) : null;
+        var resolved = readsUnnamedModule(opts) ? environment.resolveClass(binaryName, environment.classPathEntries()) : null;
         if (resolved == null) {
             resolved = environment.resolveModuleClass(binaryName);
         }

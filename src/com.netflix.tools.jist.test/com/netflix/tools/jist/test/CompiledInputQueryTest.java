@@ -21,6 +21,8 @@ import java.lang.classfile.ClassFile;
 import java.lang.constant.ClassDesc;
 import java.lang.constant.ConstantDescs;
 import java.lang.constant.MethodTypeDesc;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -34,6 +36,8 @@ import com.netflix.tools.json.Json;
 import com.netflix.tools.json.JsonValue;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -55,8 +59,13 @@ class CompiledInputQueryTest {
                     jar.putNextEntry(new JarEntry(resource));
                     jar.write(caller(name, "systemUTC", index % 2 == 0 ? "x".repeat(24_000) : ""));
                     jar.closeEntry();
-                    expected.add(name);
-                    locations.add("jar:" + archive.toUri() + "!/" + resource);
+                }
+            }
+            try (var fileSystem = FileSystems.newFileSystem(archive);
+                 var files = Files.walk(fileSystem.getPath("/"))) {
+                for (var file : files.filter(Files::isRegularFile).toList()) {
+                    expected.add("ordered." + file.getFileName().toString().replace(".class", ""));
+                    locations.add(file.toUri().toString());
                 }
             }
         }
@@ -85,7 +94,7 @@ class CompiledInputQueryTest {
 
     @Test
     void explodedInputsRetainResourcesAcrossRootSpellings(@TempDir Path directory) throws Exception {
-        var root = Files.createDirectories(directory.resolve("class files/ordered")).getParent();
+        var root = Files.createDirectories(directory.resolve("class files \u00e9/ordered")).getParent();
         Files.write(root.resolve("ordered/Caller.class"), caller("ordered.Caller", "systemUTC", ""));
         var relative = Path.of("").toAbsolutePath().relativize(root);
         for (var input : List.of(root, relative, root.resolve("."), relative.resolve("."))) {
@@ -94,6 +103,24 @@ class CompiledInputQueryTest {
                 assertEquals(1, rows.size());
                 assertTrue(rows.getFirst().get("text").asString().contains("ordered.Caller.clock"));
                 assertEquals(root.resolve("ordered/Caller.class").toString(),
+                        rows.getFirst().get("origin").get("location").asString());
+            }
+        }
+    }
+
+    @Test
+    void relationshipScansFollowClassFileAndRootLinks(@TempDir Path directory) throws Exception {
+        var target = directory.resolve("Caller.class");
+        Files.write(target, caller("ordered.Caller", "systemUTC", "x".repeat(24_000)));
+        var root = Files.createDirectories(directory.resolve("classes/ordered")).getParent();
+        Files.createSymbolicLink(root.resolve("ordered/Caller.class"), target);
+        var linkedRoot = Files.createSymbolicLink(directory.resolve("linked-classes"), root);
+        for (var input : List.of(root, linkedRoot)) {
+            for (var query : List.of("--callers", "--usages")) {
+                var rows = query(List.of(input), query);
+                assertEquals(1, rows.size());
+                assertTrue(rows.getFirst().get("text").asString().contains("ordered.Caller.clock"));
+                assertEquals(input.resolve("ordered/Caller.class").toString(),
                         rows.getFirst().get("origin").get("location").asString());
             }
         }
@@ -139,6 +166,12 @@ class CompiledInputQueryTest {
                             .withMethodBody("hit", MethodTypeDesc.of(ConstantDescs.CD_void, ConstantDescs.CD_int),
                                     ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC, code -> code.return_())));
                     jar.closeEntry();
+                }
+            }
+            try (var fileSystem = FileSystems.newFileSystem(archive);
+                 var files = Files.walk(fileSystem.getPath("/"))) {
+                for (var file : files.filter(Files::isRegularFile).toList()) {
+                    var name = "ordered." + file.getFileName().toString().replace(".class", "");
                     var origin = "(" + archive.getFileName() + ")";
                     var fields = List.of("field " + name + ".hit" + origin);
                     var methods = List.of("method " + name + ".hit()" + origin, "method " + name + ".hit(int)" + origin);
@@ -162,25 +195,127 @@ class CompiledInputQueryTest {
         }
     }
 
-    @Test
-    void relationshipScansReadSelectedMultiReleaseEntries(@TempDir Path directory) throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void archiveScansReadSelectedMultiReleaseEntries(boolean multiRelease, @TempDir Path directory) throws Exception {
         var archive = directory.resolve("versioned.jar");
         var manifest = new Manifest();
         manifest.getMainAttributes().putValue("Manifest-Version", "1.0");
-        manifest.getMainAttributes().putValue("Multi-Release", "true");
+        manifest.getMainAttributes().putValue("Multi-Release", Boolean.toString(multiRelease));
+        int feature = Runtime.version().feature();
         try (var jar = new JarOutputStream(Files.newOutputStream(archive), manifest)) {
-            for (var version : List.of("", "META-INF/versions/9/")) {
-                jar.putNextEntry(new JarEntry(version + "ordered/Versioned.class"));
-                jar.write(caller("ordered.Versioned", version.isEmpty() ? "systemDefaultZone" : "systemUTC", ""));
+            for (int version : List.of(0, 9, feature, feature + 1)) {
+                var prefix = version == 0 ? "" : "META-INF/versions/" + version + "/";
+                jar.putNextEntry(new JarEntry(prefix + "ordered/Versioned.class"));
+                jar.write(caller("ordered.Versioned", version == 0 || version == feature ? "systemUTC" : "systemDefaultZone", ""));
                 jar.closeEntry();
             }
+            jar.putNextEntry(new JarEntry("META-INF/versions/" + feature + "/ordered/VersionOnly.class"));
+            jar.write(caller("ordered.VersionOnly", "systemUTC", ""));
+            jar.closeEntry();
+            jar.putNextEntry(new JarEntry("META-INF/versions/" + (feature + 1) + "/ordered/FutureOnly.class"));
+            jar.write(caller("ordered.FutureOnly", "systemUTC", ""));
+            jar.closeEntry();
         }
+        var expectedNames = multiRelease ? List.of("Versioned", "VersionOnly") : List.of("Versioned");
+        for (var query : List.of("--callers", "--usages")) {
+            var rows = query(List.of(archive), query);
+            assertEquals(expectedNames.size(), rows.size());
+            for (var name : expectedNames) {
+                var matches = rows.stream().filter(row -> row.get("text").asString().contains("ordered." + name + ".clock")).toList();
+                assertEquals(1, matches.size());
+                assertEquals("jar:" + archive.toUri() + "!/" + (multiRelease ? "META-INF/versions/" + feature + "/" : "")
+                                + "ordered/" + name + ".class",
+                        matches.getFirst().get("origin").get("location").asString());
+            }
+        }
+        var output = new StringWriter();
+        var error = new StringWriter();
+        int status = new Jist().run(new PrintWriter(output), new PrintWriter(error),
+                "--system", "none", "--class-path", archive.toString(), "--source", "none", "-l", "--kind", "class");
+        assertEquals(0, status, error.toString());
+        assertEquals(expectedNames.stream().map(name -> "class ordered." + name + "(versioned.jar)").sorted().toList(),
+                output.toString().lines().sorted().toList());
+        for (var name : expectedNames) {
+            output = new StringWriter();
+            error = new StringWriter();
+            status = new Jist().run(new PrintWriter(output), new PrintWriter(error),
+                    "--limit-modules", "java.base", "--exclude-system-modules", "--class-path", archive.toString(),
+                    "--source", "none", "-l", "--callees", "ordered." + name + ".clock");
+            assertEquals(0, status, error.toString());
+            var system = "java.base@" + Object.class.getModule().getDescriptor().rawVersion().orElseThrow() + "/";
+            assertEquals("method " + system + "java.time.Clock.systemUTC()\n", output.toString());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void duplicateArchiveNamesUseOneCompleteSelectedEntry(boolean largerFirst, @TempDir Path directory) throws Exception {
+        var archive = directory.resolve("duplicate.jar");
+        var original = "ordered/Duplicate.class";
+        var temporary = "ordered/Duplicatf.class";
+        try (var jar = new JarOutputStream(Files.newOutputStream(archive))) {
+            jar.putNextEntry(new JarEntry(original));
+            jar.write(caller("ordered.Duplicate", "systemDefaultZone", largerFirst ? "x".repeat(24_000) : ""));
+            jar.closeEntry();
+            jar.putNextEntry(new JarEntry(temporary));
+            jar.write(caller("ordered.Duplicate", "systemUTC", largerFirst ? "" : "x".repeat(24_000)));
+            jar.closeEntry();
+        }
+        var bytes = Files.readAllBytes(archive);
+        var oldName = temporary.getBytes(StandardCharsets.UTF_8);
+        var newName = original.getBytes(StandardCharsets.UTF_8);
+        int renamed = 0;
+        for (int offset = 0; offset <= bytes.length - oldName.length; offset++) {
+            if (java.util.Arrays.equals(bytes, offset, offset + oldName.length, oldName, 0, oldName.length)) {
+                System.arraycopy(newName, 0, bytes, offset, newName.length);
+                renamed++;
+            }
+        }
+        assertEquals(2, renamed, "Rename the local and central-directory filenames without modifying ClassFiles");
+        Files.write(archive, bytes);
+
         for (var query : List.of("--callers", "--usages")) {
             var rows = query(List.of(archive), query);
             assertEquals(1, rows.size());
-            assertTrue(rows.getFirst().get("text").asString().contains("ordered.Versioned.clock"));
-            assertEquals("jar:" + archive.toUri() + "!/META-INF/versions/9/ordered/Versioned.class",
-                    rows.getFirst().get("origin").get("location").asString());
+            assertTrue(rows.getFirst().get("text").asString().contains("ordered.Duplicate.clock"));
+        }
+        for (var scope : List.of("none", "signature")) {
+            var output = new StringWriter();
+            var error = new StringWriter();
+            int status = new Jist().run(new PrintWriter(output), new PrintWriter(error),
+                    "--limit-modules", "java.base", "--exclude-system-modules", "--class-path", archive.toString(),
+                    "--source", scope, "-l", "--kind", "method", "-e", "clock");
+            assertEquals(0, status, error.toString());
+            assertEquals("method ordered.Duplicate.clock()(duplicate.jar)\n", output.toString());
+        }
+        var output = new StringWriter();
+        var error = new StringWriter();
+        int status = new Jist().run(new PrintWriter(output), new PrintWriter(error),
+                "--limit-modules", "java.base", "--class-path", archive.toString(), "--source", "none", "-l",
+                "--kind", "class", "ordered.Duplicate");
+        assertEquals(0, status, error.toString());
+        assertEquals("class ordered.Duplicate(duplicate.jar)\n", output.toString());
+    }
+
+    @Test
+    void embeddedQueriesObserveReplacedArchives(@TempDir Path directory) throws Exception {
+        var archive = directory.resolve("replaced.jar");
+        var tool = new Jist();
+        for (var name : List.of("First", "Second", "Third")) {
+            try (var jar = new JarOutputStream(Files.newOutputStream(archive))) {
+                jar.putNextEntry(new JarEntry("ordered/" + name + ".class"));
+                jar.write(caller("ordered." + name, "systemUTC", ""));
+                jar.closeEntry();
+            }
+            var output = new StringWriter();
+            var error = new StringWriter();
+            int status = tool.run(new PrintWriter(output), new PrintWriter(error),
+                    "--limit-modules", "java.base", "--exclude-system-modules", "--class-path", archive.toString(),
+                    "--source", "none", "-l", "--callers", "java.time.Clock.systemUTC");
+            assertEquals(0, status, error.toString());
+            assertEquals("", error.toString());
+            assertEquals("method ordered." + name + ".clock()(replaced.jar)\n", output.toString());
         }
     }
 

@@ -16,36 +16,84 @@ package com.netflix.tools.jist;
 
 import module java.base;
 
-/** Filters non-archive files from class paths. */
-final class ClassPaths {
-    static List<Path> prepare(String classPath) throws ToolException {
-        var entries = new ArrayList<Path>();
-        for (var path : SearchEnvironment.parsePathList(classPath)) {
-            var name = path.getFileName();
-            if (Files.isRegularFile(path)) {
-                boolean archiveName = name != null
-                        && (name.toString().endsWith(".jar") || name.toString().endsWith(".zip"));
-                try (var archive = new JarFile(path.toFile(), false, ZipFile.OPEN_READ, Runtime.version())) {
-                    // Unconventional extensions can still contain valid archives.
-                } catch (ZipException e) {
-                    if (archiveName) {
-                        throw new ToolException(2, "Cannot read archive " + path + ": " + e.getMessage());
-                    }
-                    continue;
-                } catch (IOException e) {
-                    throw new ToolException(2, "Cannot read class-path entry " + path + ": " + e.getMessage());
+/** Owns and prepares compiled input views for one query. */
+final class ClassPaths implements Closeable {
+    private final Map<Path, Opening> roots = new ConcurrentHashMap<>();
+    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final Semaphore capacity = new Semaphore(Runtime.getRuntime().availableProcessors());
+
+    private final class Opening extends FutureTask<CompiledInputs.Root> {
+        private volatile boolean failureObserved;
+
+        Opening(Path path) {
+            super(() -> {
+                capacity.acquire();
+                try {
+                    return CompiledInputs.Root.open(path);
+                } finally {
+                    capacity.release();
                 }
-            }
-            entries.add(path);
+            });
         }
-        return List.copyOf(entries);
+
+        @Override
+        public CompiledInputs.Root get() throws InterruptedException, ExecutionException {
+            try {
+                return super.get();
+            } catch (ExecutionException failure) {
+                failureObserved = true;
+                throw failure;
+            }
+        }
     }
 
-    static JarFile openArchive(Path path, boolean verify) throws IOException {
-        try {
-            return new JarFile(path.toFile(), verify, ZipFile.OPEN_READ, Runtime.version());
-        } catch (IOException e) {
-            throw new IOException("Cannot read archive " + path + ": " + e.getMessage(), e);
+    void prepare(Collection<Path> entries) {
+        entries.forEach(path -> prepare(path, true));
+    }
+
+    private Opening prepare(Path path, boolean background) {
+        var key = path.toAbsolutePath().normalize();
+        return roots.computeIfAbsent(key, _ -> {
+            var opening = new Opening(path);
+            if (background) executor.execute(opening);
+            else opening.run();
+            return opening;
+        });
+    }
+
+    CompiledInputs.Root root(Path path) throws IOException {
+        return CompiledInputs.OrderedReads.await(prepare(path, false));
+    }
+
+    @Override
+    public void close() throws IOException {
+        executor.close();
+        IOException failure = null;
+        // Finish every open before closing views, including after a failed query.
+        for (var input : roots.values()) {
+            if (input.state() != Future.State.SUCCESS) continue;
+            try {
+                input.resultNow().close();
+            } catch (IOException e) {
+                if (failure == null) failure = e;
+                else failure.addSuppressed(e);
+            }
         }
+        // Failures already delivered to the search must not be thrown again by cleanup.
+        for (var input : roots.values()) {
+            if (input.state() != Future.State.FAILED || input.failureObserved) continue;
+            try {
+                CompiledInputs.OrderedReads.await(input);
+            } catch (IOException e) {
+                if (failure == null) failure = e;
+                else failure.addSuppressed(e);
+            }
+        }
+        roots.clear();
+        if (failure != null) throw failure;
+    }
+
+    static FileSystem openArchive(Path path) throws IOException {
+        return FileSystems.newFileSystem(path, Map.of("releaseVersion", Runtime.version()));
     }
 }

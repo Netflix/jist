@@ -34,23 +34,18 @@ final class ClassHierarchy implements Closeable {
     private final SourceLookup sources;
     private final Set<String> sourceTypes = new HashSet<>();
     private final Set<Path> sourceFiles = new HashSet<>();
-    private final URLClassLoader classPath;
+    private final List<Path> classPath;
     private Path system;
     private Map<String, Set<String>> systemPackages;
 
     private ClassHierarchy(Options options, SearchEnvironment environment) throws IOException, ToolException {
         this.environment = environment;
         this.sources = environment.sources();
-        var urls = new ArrayList<URL>();
-        if (readsUnnamedModule(options)) {
-            for (var entry : environment.classPathEntries()) {
-                urls.add(entry.toAbsolutePath().normalize().toUri().toURL());
-            }
-        }
-        classPath = new URLClassLoader(urls.toArray(URL[]::new), null);
+        classPath = readsUnnamedModule(options) ? environment.classPathEntries() : List.of();
     }
 
     static ClassHierarchy read(Options options, SearchEnvironment environment) throws IOException, ToolException {
+        environment.prepareClassPath();
         var hierarchy = new ClassHierarchy(options, environment);
         try {
             hierarchy.sources.prepareOrdinarySources();
@@ -91,7 +86,7 @@ final class ClassHierarchy implements Closeable {
 
     @Override
     public void close() throws IOException {
-        try (sources; classPath) {}
+        sources.close();
     }
 
     Set<String> subtypes(Set<String> targets, boolean direct) throws IOException, ToolException {
@@ -116,7 +111,7 @@ final class ClassHierarchy implements Closeable {
         var visiting = new HashSet<String>();
         for (var candidate : types.keySet()) {
             if (reachesSource(candidate, memo, visiting)) {
-                matches.add(candidate);
+                matches.add(displayName(candidate));
             }
         }
         return Set.copyOf(matches);
@@ -151,12 +146,12 @@ final class ClassHierarchy implements Closeable {
         var memo = new HashMap<String, Boolean>();
         var visiting = new HashSet<String>();
         for (var candidate : types.keySet()) {
-            if ((includeTargets || !targets.contains(candidate))
+            if ((includeTargets || !targets.contains(displayName(candidate)))
                     && (direct ? types.get(candidate)
                                       .stream()
-                                      .anyMatch(targets::contains)
+                                      .anyMatch(parent -> targets.contains(displayName(parent)))
                             : reaches(candidate, targets, memo, visiting))) {
-                matches.add(candidate);
+                matches.add(displayName(candidate));
             }
         }
         return Set.copyOf(matches);
@@ -166,7 +161,7 @@ final class ClassHierarchy implements Closeable {
         var selected = new HashMap<String, List<String>>();
         compiledInputs.forEach((root, classes) -> {
             var resources = classes.stream()
-                    .filter(candidate -> matches.test(candidate.name()))
+                    .filter(candidate -> matches.test(displayName(candidate.name())))
                     .map(PreparedClass::resource)
                     .toList();
             if (!resources.isEmpty()) {
@@ -180,11 +175,11 @@ final class ClassHierarchy implements Closeable {
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             for (var input : inputs) {
                 var classes = new ArrayList<PreparedClass>();
-                try (var root = CompiledInputs.Root.open(input.path());
-                     var reads = new CompiledInputs.OrderedReads<PreparedClass>(executor, prepared -> {
-                         add(prepared);
-                         classes.add(prepared);
-                     })) {
+                var root = environment.compiledInput(input.path());
+                try (var reads = new CompiledInputs.OrderedReads<PreparedClass>(executor, prepared -> {
+                    add(prepared);
+                    classes.add(prepared);
+                })) {
                     root.forEach(false, resource -> {
                         if (input.filter().test(resource.resource())) {
                             reads.submit(() -> prepare(CLASS_FILE.parse(resource.read()), resource.resource()));
@@ -209,7 +204,7 @@ final class ClassHierarchy implements Closeable {
         }
         boolean result = false;
         for (var parent : parents(candidate)) {
-            if (targets.contains(parent) || reaches(parent, targets, memo, visiting)) {
+            if (targets.contains(displayName(parent)) || reaches(parent, targets, memo, visiting)) {
                 result = true;
                 break;
             }
@@ -225,7 +220,7 @@ final class ClassHierarchy implements Closeable {
         }
         var internalName = model.thisClass().asInternalName();
         var source = sources.mayHaveOrdinarySource(internalName) ? sources.ordinarySource(model) : null;
-        return new PreparedClass(displayName(internalName), parents(model), source, resource);
+        return new PreparedClass(internalName.replace('/', '.'), parents(model), source, resource);
     }
 
     private void add(PreparedClass prepared) {
@@ -242,12 +237,12 @@ final class ClassHierarchy implements Closeable {
         if (known != null) {
             return known;
         }
-        var candidates = SearchEnvironment.classFileCandidates(name);
-        var model = classPathClass(candidates);
+        var resource = name.replace('.', '/') + ".class";
+        var model = classPathClass(resource);
         if (model == null) {
-            model = moduleClass(candidates);
+            model = moduleClass(resource);
             if (model == null) {
-                model = systemClass(candidates);
+                model = systemClass(resource);
             }
         }
         List<String> parents;
@@ -259,7 +254,7 @@ final class ClassHierarchy implements Closeable {
             }
         } else {
             parents = List.of();
-            if (candidates.stream().anyMatch(sources::mayHaveOrdinarySource)) {
+            if (sources.mayHaveOrdinarySource(resource)) {
                 var source = environment.resolveSourceFile(name);
                 if (source != null) {
                     sourceTypes.add(name);
@@ -278,56 +273,47 @@ final class ClassHierarchy implements Closeable {
         }
     }
 
-    private ClassModel classPathClass(List<String> candidates) throws IOException {
+    private ClassModel classPathClass(String resource) throws IOException {
         // Resolve resources without loading classes or applying javac's --release to multi-release jars.
-        for (var candidate : candidates) {
-            var resource = classPath.findResource(candidate);
-            if (resource == null) {
+        for (var path : classPath) {
+            var input = environment.compiledInput(path).find(resource);
+            if (input != null) {
+                return CLASS_FILE.parse(input.read());
+            }
+        }
+        return null;
+    }
+
+    private ClassModel moduleClass(String resource) throws IOException, ToolException {
+        for (var module : environment.moduleInputs()) {
+            if (!module.includesResource(resource)) {
                 continue;
             }
-            var connection = resource.openConnection();
-            connection.setUseCaches(false);
-            try (var input = connection.getInputStream()) {
-                return CLASS_FILE.parse(CompiledInputs.readAllBytes(input, connection.getContentLengthLong()));
+            var input = environment.compiledInput(module.location()).find(resource);
+            if (input != null) {
+                return CLASS_FILE.parse(input.read());
             }
         }
         return null;
     }
 
-    private ClassModel moduleClass(List<String> candidates) throws IOException, ToolException {
-        for (var candidate : candidates) {
-            for (var module : environment.moduleInputs()) {
-                if (!module.includesResource(candidate)) {
-                    continue;
-                }
-                var bytes = CompiledInputs.readClass(module.location(), candidate);
-                if (bytes != null) {
-                    return CLASS_FILE.parse(bytes);
-                }
-            }
-        }
-        return null;
-    }
-
-    private ClassModel systemClass(List<String> candidates) throws IOException, ToolException {
+    private ClassModel systemClass(String resource) throws IOException, ToolException {
         if (system == null) {
             return null;
         }
         if (systemPackages == null) {
             systemPackages = environment.systemModulePackages();
         }
-        for (var candidate : candidates) {
-            int slash = candidate.lastIndexOf('/');
-            var packageName = slash < 0 ? "" : candidate.substring(0, slash).replace('/', '.');
-            for (var module : systemPackages.entrySet()) {
-                if (!module.getValue().contains(packageName)
-                        || !environment.includesSystemResource(module.getKey(), candidate)) {
-                    continue;
-                }
-                var file = system.resolve(module.getKey()).resolve(candidate);
-                if (Files.isRegularFile(file)) {
-                    return CLASS_FILE.parse(Files.readAllBytes(file));
-                }
+        int slash = resource.lastIndexOf('/');
+        var packageName = slash < 0 ? "" : resource.substring(0, slash).replace('/', '.');
+        for (var module : systemPackages.entrySet()) {
+            if (!module.getValue().contains(packageName)
+                    || !environment.includesSystemResource(module.getKey(), resource)) {
+                continue;
+            }
+            var file = system.resolve(module.getKey()).resolve(resource);
+            if (Files.isRegularFile(file)) {
+                return CLASS_FILE.parse(Files.readAllBytes(file));
             }
         }
         return null;
@@ -335,13 +321,13 @@ final class ClassHierarchy implements Closeable {
 
     private static List<String> parents(ClassModel model) {
         var parents = new ArrayList<String>(model.interfaces().size() + 1);
-        model.superclass().ifPresent(parent -> parents.add(displayName(parent.asInternalName())));
-        model.interfaces().forEach(parent -> parents.add(displayName(parent.asInternalName())));
+        model.superclass().ifPresent(parent -> parents.add(parent.asInternalName().replace('/', '.')));
+        model.interfaces().forEach(parent -> parents.add(parent.asInternalName().replace('/', '.')));
         return List.copyOf(parents);
     }
 
-    private static String displayName(String internalName) {
-        return internalName.replace('/', '.').replace('$', '.');
+    private static String displayName(String binaryName) {
+        return binaryName.replace('$', '.');
     }
 
     private record Input(Path path, Filter filter) {}

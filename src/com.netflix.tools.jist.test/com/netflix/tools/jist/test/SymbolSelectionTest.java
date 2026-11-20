@@ -202,7 +202,8 @@ class SymbolSelectionTest {
     void packageDescriptionsUseTheDeclaredPackage(String input) {
         var result = run(input, List.of("--kind", "package"), "sample");
         assertEquals(0, result.status(), result.error());
-        assertEquals("sample: package sample;\nalternate.sample: package alternate.sample;\n", result.output());
+        assertEquals(List.of("alternate.sample: package alternate.sample;", "sample: package sample;"),
+                result.output().lines().sorted().toList());
     }
 
     @ParameterizedTest

@@ -82,6 +82,9 @@ final class RelationshipSearch implements Closeable {
     }
 
     static RelationshipSearch open(Options options, SearchEnvironment environment) throws IOException, ToolException {
+        if (!options.subtypes().isEmpty() || !options.overrides().isEmpty()) {
+            environment.prepareClassPath();
+        }
         var search = new RelationshipSearch(options, environment);
         try {
             for (var name : options.subtypes()) {

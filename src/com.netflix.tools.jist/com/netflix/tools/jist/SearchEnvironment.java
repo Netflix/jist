@@ -36,10 +36,13 @@ final class SearchEnvironment implements AutoCloseable {
     private final Resolution resolution;
 
     private static final class Resolution {
+        private final ClassPaths inputs = new ClassPaths();
         private List<Path> classPath;
         private ModuleResolution modules;
         private Map<String, List<Path>> patches;
         private List<ModuleSourceInput> sourceInputs;
+        private List<Path> sourceRoots;
+        private List<Path> sourceDirectories;
         private final Map<String, Boolean> classTargets = new HashMap<>();
         private final Map<String, Optional<Path>> sourceFiles = new HashMap<>();
         private FileSystem system;
@@ -66,8 +69,19 @@ final class SearchEnvironment implements AutoCloseable {
     }
 
     List<Path> classPathEntries() throws ToolException {
-        if (resolution.classPath == null) resolution.classPath = ClassPaths.prepare(options.classPath());
+        if (resolution.classPath == null) resolution.classPath = parsePathList(options.classPath());
         return resolution.classPath;
+    }
+
+    CompiledInputs.Root compiledInput(Path path) throws IOException {
+        return resolution.inputs.root(path);
+    }
+
+    void prepareClassPath() throws IOException, ToolException {
+        modules();
+        if (!options.excludeApplicationClasses() && readsUnnamedModule(options)) {
+            resolution.inputs.prepare(classPathEntries().stream().filter(this::searches).toList());
+        }
     }
 
     Path systemModules() throws IOException {
@@ -94,8 +108,10 @@ final class SearchEnvironment implements AutoCloseable {
 
     @Override
     public void close() throws IOException {
-        if (resolution.closeSystem && resolution.system != null) {
-            resolution.system.close();
+        try (var inputs = resolution.inputs) {
+            if (resolution.closeSystem && resolution.system != null) {
+                resolution.system.close();
+            }
         }
     }
 
@@ -117,8 +133,9 @@ final class SearchEnvironment implements AutoCloseable {
 
     ModuleResolution modules() throws IOException, ToolException {
         classPathEntries();
-        if (resolution.modules == null)
-            resolution.modules = computeModuleResolution(options);
+        if (resolution.modules == null) {
+            resolution.modules = computeModuleResolution(options, resolution.inputs);
+        }
         return resolution.modules;
     }
 
@@ -290,9 +307,14 @@ final class SearchEnvironment implements AutoCloseable {
                 return new SymbolSelection(path, target.substring(separator + marker.length()));
             }
         }
-        if (classTargetExists(target))
+        if (resolveSourceFileCandidate(target) != null)
             return new SymbolSelection(target, null);
         int separator = target.lastIndexOf('.');
+        if (includeMembers && separator > 0 && resolveSourceFileCandidate(target.substring(0, separator)) != null) {
+            return new SymbolSelection(target.substring(0, separator), target.substring(separator + 1));
+        }
+        if (classTargetExists(target))
+            return new SymbolSelection(target, null);
         if (includeMembers && separator > 0) {
             var owner = target.substring(0, separator);
             if (classTargetExists(owner)) {
@@ -306,8 +328,8 @@ final class SearchEnvironment implements AutoCloseable {
         var cached = resolution.classTargets.get(target);
         if (cached != null) return cached;
         var opts = options;
-        boolean exists = readsUnnamedModule(opts)
-                        && resolveClass(target, classPathEntries()) != null
+        boolean exists = resolveSourceFileCandidate(target) != null
+                || readsUnnamedModule(opts) && resolveClass(target, classPathEntries()) != null
                 || resolveModuleClass(target) != null
                 || resolveSystemClass(target) != null
                 || resolveSourceFile(target) != null;
@@ -321,9 +343,10 @@ final class SearchEnvironment implements AutoCloseable {
                        java.lang.module.ModuleDescriptor descriptor,
                        List<Path> precedingPatches,
                        boolean patch,
-                       boolean selected) {
+                       boolean selected,
+                       ClassPaths inputs) {
         boolean includesResource(String resource) throws IOException {
-            return !(patch && resource.equals("module-info.class")) && !ModulePatches.contains(precedingPatches, resource);
+            return !(patch && resource.equals("module-info.class")) && !ModulePatches.contains(inputs, precedingPatches, resource);
         }
 
         boolean visibleResource(String resource) throws IOException {
@@ -331,13 +354,13 @@ final class SearchEnvironment implements AutoCloseable {
         }
     }
 
-    record ModuleSourceInput(String module, Path location, Set<String> visiblePackages, List<Path> precedingPatches, boolean patch) {
+    record ModuleSourceInput(String module, Path location, Set<String> visiblePackages, List<Path> precedingPatches, boolean patch, ClassPaths inputs) {
         boolean includesResource(String resource) throws IOException {
             if (resource.equals("module-info.java")) return !patch;
             var slash = resource.lastIndexOf('/');
             var packageName = slash < 0 ? "" : resource.substring(0, slash).replace('/', '.');
             return (visiblePackages == null || visiblePackages.contains(packageName))
-                    && !ModulePatches.contains(precedingPatches, resource);
+                    && !ModulePatches.contains(inputs, precedingPatches, resource);
         }
     }
 
@@ -351,7 +374,7 @@ final class SearchEnvironment implements AutoCloseable {
     }
 
     Map<String, Set<String>> systemModulePackages() throws IOException, ToolException {
-        var references = systemModuleReferences(options.system());
+        var references = systemModuleReferences();
         var packages = new LinkedHashMap<String, Set<String>>();
         for (var name : modules().systemPackages().keySet()) {
             // Resolution also needs unexported packages, unlike declaration visibility.
@@ -360,7 +383,7 @@ final class SearchEnvironment implements AutoCloseable {
         return packages;
     }
 
-    private static ModuleResolution computeModuleResolution(Options opts) throws IOException, ToolException {
+    private ModuleResolution computeModuleResolution(Options opts, ClassPaths inputs) throws IOException, ToolException {
         var entries = parsePathList(opts.modulePath());
         var applicationFinder = java.lang.module.ModuleFinder.of(entries.toArray(Path[]::new));
         var compiledReferences = referencesByName(applicationFinder);
@@ -369,7 +392,7 @@ final class SearchEnvironment implements AutoCloseable {
         compiledReferences.putAll(upgrades);
         var applicationReferences = new LinkedHashMap<>(compiledReferences);
         sourceModuleReferences(opts).forEach(applicationReferences::putIfAbsent);
-        var systemReferences = systemModuleReferences(opts.system());
+        var systemReferences = systemModuleReferences();
         var observable = new LinkedHashMap<String, java.lang.module.ModuleReference>();
         observable.putAll(systemReferences);
         applicationReferences.forEach(observable::putIfAbsent);
@@ -431,7 +454,7 @@ final class SearchEnvironment implements AutoCloseable {
             var patchRoots = patches.getOrDefault(module.name(), List.of());
             for (int i = 0; i < patchRoots.size(); i++) {
                 applications.add(new ModuleInput(module.name(), patchRoots.get(i), visiblePackages,
-                        module.reference().descriptor(), patchRoots.subList(0, i), true, selectedModules(opts).contains(module.name())));
+                        module.reference().descriptor(), patchRoots.subList(0, i), true, selectedModules(opts).contains(module.name()), inputs));
             }
             if (!patchRoots.isEmpty()) applicationPackages.put(module.name(), visiblePackages);
             if (applicationReferences.containsKey(module.name())) {
@@ -446,7 +469,7 @@ final class SearchEnvironment implements AutoCloseable {
                     applications.add(new ModuleInput(module.name(),
                                                      Path.of(location),
                                                      visiblePackages,
-                                                     module.reference().descriptor(), patchRoots, false, selectedModules(opts).contains(module.name())));
+                                                     module.reference().descriptor(), patchRoots, false, selectedModules(opts).contains(module.name()), inputs));
                 }
             }
             if (systemReferences.get(module.name()) == module.reference()) {
@@ -585,7 +608,8 @@ final class SearchEnvironment implements AutoCloseable {
         }
     }
 
-    private static Map<String, java.lang.module.ModuleReference> systemModuleReferences(String system) throws IOException {
+    private Map<String, java.lang.module.ModuleReference> systemModuleReferences() throws IOException {
+        var system = options.system();
         if ("none".equals(system))
             return new LinkedHashMap<>();
         if (system == null)
@@ -594,6 +618,9 @@ final class SearchEnvironment implements AutoCloseable {
                 Path.of(system)
                         .toAbsolutePath()
                         .normalize();
+        if (javaHome.equals(Path.of(System.getProperty("java.home")).toAbsolutePath().normalize())) {
+            return referencesByName(java.lang.module.ModuleFinder.ofSystem());
+        }
         try {
             return new LinkedHashMap<>(SYSTEM_MODULES.computeIfAbsent(javaHome,
                             home -> {
@@ -608,10 +635,19 @@ final class SearchEnvironment implements AutoCloseable {
         }
     }
 
-    private static Map<String, java.lang.module.ModuleReference> loadSystemModuleReferences(Path javaHome) throws IOException {
+    private Map<String, java.lang.module.ModuleReference> loadSystemModuleReferences(Path javaHome) throws IOException {
+        var references = new LinkedHashMap<String, java.lang.module.ModuleReference>();
+        var modules = systemModules();
+        if (modules != null) {
+            try (var entries = Files.list(modules)) {
+                for (var module : entries.toList()) {
+                    readSystemModuleDescriptor(module.resolve("module-info.class"), references);
+                }
+            }
+            return references;
+        }
         var jmods = javaHome.resolve("jmods");
         if (Files.isDirectory(jmods)) {
-            var references = new LinkedHashMap<String, java.lang.module.ModuleReference>();
             try (var files = Files.list(jmods)) {
                 for (var jmod :
                         files.filter(path ->
@@ -620,37 +656,22 @@ final class SearchEnvironment implements AutoCloseable {
                                                 .endsWith(".jmod"))
                                 .sorted()
                                 .toList()) {
-                    try (var archive = new ZipFile(jmod.toFile())) {
-                        var moduleInfo = archive.getEntry("classes/module-info.class");
-                        if (moduleInfo == null)
-                            continue;
-                        try (var input = archive.getInputStream(moduleInfo)) {
-                            var descriptor = java.lang.module.ModuleDescriptor.read(input);
-                            references.put(descriptor.name(), descriptorReference(descriptor));
-                        }
-                    }
-                }
-            }
-            return references;
-        }
-        if (!Files.isRegularFile(javaHome.resolve("lib/modules"))) {
-            return new LinkedHashMap<>();
-        }
-        var references = new LinkedHashMap<String, java.lang.module.ModuleReference>();
-        try (var fileSystem = FileSystems.newFileSystem(URI.create("jrt:/"), Map.of("java.home", javaHome.toString()))) {
-            try (var modules = Files.list(fileSystem.getPath("/modules"))) {
-                for (var module : modules.toList()) {
-                    var moduleInfo = module.resolve("module-info.class");
-                    if (!Files.isRegularFile(moduleInfo))
-                        continue;
-                    try (var input = Files.newInputStream(moduleInfo)) {
-                        var descriptor = java.lang.module.ModuleDescriptor.read(input);
-                        references.put(descriptor.name(), descriptorReference(descriptor));
+                    try (var archive = ClassPaths.openArchive(jmod)) {
+                        readSystemModuleDescriptor(archive.getPath("/classes/module-info.class"), references);
                     }
                 }
             }
         }
         return references;
+    }
+
+    private static void readSystemModuleDescriptor(Path moduleInfo, Map<String, java.lang.module.ModuleReference> references) throws IOException {
+        if (Files.isRegularFile(moduleInfo)) {
+            try (var input = Files.newInputStream(moduleInfo)) {
+                var descriptor = java.lang.module.ModuleDescriptor.read(input);
+                references.put(descriptor.name(), descriptorReference(descriptor));
+            }
+        }
     }
 
     private static java.lang.module.ModuleReference descriptorReference(java.lang.module.ModuleDescriptor descriptor) {
@@ -879,6 +900,9 @@ final class SearchEnvironment implements AutoCloseable {
     }
 
     private List<ModuleSourceInput> computeModuleSourceInputs() throws IOException, ToolException {
+        if (options.moduleSourcePaths().isEmpty() && options.patchModules().isEmpty()) {
+            return List.of();
+        }
         var configured = ModuleSourcePaths.parse(options.moduleSourcePaths());
         var inputs = new LinkedHashMap<Path, ModuleSourceInput>();
         var modules = modules();
@@ -890,20 +914,20 @@ final class SearchEnvironment implements AutoCloseable {
             var roots = patches.getOrDefault(module.getKey(), List.of());
             for (int i = 0; i < roots.size(); i++) {
                 var root = roots.get(i);
-                inputs.putIfAbsent(root, new ModuleSourceInput(module.getKey(), root, visible, roots.subList(0, i), true));
+                inputs.putIfAbsent(root, new ModuleSourceInput(module.getKey(), root, visible, roots.subList(0, i), true, resolution.inputs));
             }
         }
         for (var module : modules.applicationPackages().entrySet()) {
             var visible = selectedModules(options).contains(module.getKey()) ? null : module.getValue();
             for (var root : configured.forModule(module.getKey())) {
-                inputs.putIfAbsent(root, new ModuleSourceInput(module.getKey(), root, visible, patches.getOrDefault(module.getKey(), List.of()), false));
+                inputs.putIfAbsent(root, new ModuleSourceInput(module.getKey(), root, visible, patches.getOrDefault(module.getKey(), List.of()), false, resolution.inputs));
             }
         }
         return List.copyOf(inputs.values());
     }
 
     boolean includesSystemResource(String module, String resource) throws IOException, ToolException {
-        return !ModulePatches.contains(patches().getOrDefault(module, List.of()), resource);
+        return !ModulePatches.contains(resolution.inputs, patches().getOrDefault(module, List.of()), resource);
     }
 
     boolean includesSource(Path root, Path source) throws IOException, ToolException {
@@ -915,7 +939,7 @@ final class SearchEnvironment implements AutoCloseable {
             }
         }
         var roots = moduleSourceInputs().stream().filter(ModuleSourceInput::patch).map(ModuleSourceInput::location).toList();
-        return !ModulePatches.contains(roots, resource);
+        return !ModulePatches.contains(resolution.inputs, roots, resource);
     }
 
     SourceLookup sources() throws IOException, ToolException {
@@ -929,11 +953,36 @@ final class SearchEnvironment implements AutoCloseable {
     }
 
     List<Path> sourceRoots() throws IOException, ToolException {
-        var roots = new LinkedHashSet<Path>();
-        roots.addAll(moduleSourceInputs().stream().filter(ModuleSourceInput::patch).map(ModuleSourceInput::location).toList());
-        roots.addAll(parsePathList(options.sourcePath()));
-        roots.addAll(moduleSourceRoots());
-        return List.copyOf(roots);
+        if (resolution.sourceRoots == null) {
+            var roots = new LinkedHashSet<Path>();
+            roots.addAll(moduleSourceInputs().stream().filter(ModuleSourceInput::patch).map(ModuleSourceInput::location).toList());
+            roots.addAll(parsePathList(options.sourcePath()));
+            roots.addAll(moduleSourceRoots());
+            resolution.sourceRoots = List.copyOf(roots);
+        }
+        return resolution.sourceRoots;
+    }
+
+    private List<Path> sourceDirectories() throws IOException, ToolException {
+        if (resolution.sourceDirectories == null) {
+            resolution.sourceDirectories = sourceRoots().stream().filter(Files::isDirectory).toList();
+        }
+        return resolution.sourceDirectories;
+    }
+
+    Path resolveSourceFileCandidate(String binaryName) throws IOException, ToolException {
+        var cached = resolution.sourceFiles.get(binaryName);
+        if (cached != null) return cached.orElse(null);
+        var candidates = sourceFileCandidates(binaryName);
+        for (var entry : sourceDirectories()) {
+            for (var candidate : candidates) {
+                if (Files.isRegularFile(entry.resolve(candidate))) {
+                    // Preserve source-root precedence, including declarations in differently named files.
+                    return resolveSourceFile(binaryName);
+                }
+            }
+        }
+        return null;
     }
 
     Path resolveSourceFile(String binaryName) throws IOException, ToolException {
@@ -945,11 +994,11 @@ final class SearchEnvironment implements AutoCloseable {
     }
 
     private Path findSourceFile(String binaryName) throws IOException, ToolException {
+        var directories = sourceDirectories();
+        if (directories.isEmpty()) return null;
         var compiler = ToolProvider.getSystemJavaCompiler();
         try (var fileManager = compiler.getStandardFileManager(null, Locale.ROOT, StandardCharsets.UTF_8)) {
-            for (var entry : sourceRoots()) {
-                if (!Files.isDirectory(entry))
-                    continue;
+            for (var entry : directories) {
                 for (var candidate : sourceFileCandidates(binaryName)) {
                     var sourceFile = entry.resolve(candidate);
                     if (Files.isRegularFile(sourceFile) && includesSource(entry, sourceFile) && sourceDeclaresClass(compiler, fileManager, sourceFile, binaryName)) {
@@ -959,7 +1008,8 @@ final class SearchEnvironment implements AutoCloseable {
                 try (var files = Files.walk(entry)) {
                     var iterator =
                             files.filter(Files::isRegularFile)
-                                    .filter(path -> path.toString().endsWith(JAVA_EXT))
+                                    .filter(path -> path.toString().endsWith(JAVA_EXT)
+                                            && !path.getFileName().toString().equals("module-info.java"))
                                     .iterator();
                     while (iterator.hasNext()) {
                         var sourceFile = iterator.next();
@@ -1100,7 +1150,8 @@ final class SearchEnvironment implements AutoCloseable {
     }
 
     /** Reads a top-level type and its nested classes, including patches containing only a nested ClassFile. */
-    private static ResolvedClass readClassGroup(Path entry, String candidate, boolean patch) throws IOException {
+    private ResolvedClass readClassGroup(Path location, String candidate, boolean patch) throws IOException {
+        var entry = compiledInput(location).path();
         var outer = candidate.substring(0, candidate.length() - CLASS_EXT.length());
         int nested = outer.indexOf('$');
         if (nested >= 0) outer = outer.substring(0, nested);
@@ -1130,50 +1181,24 @@ final class SearchEnvironment implements AutoCloseable {
                     return new ResolvedClass(readClassGroup(selected), unitLocation(selected));
                 }
             }
-        } else if (Files.isRegularFile(entry)) {
-            try (var jar = ClassPaths.openArchive(entry, true)) {
-                if (!patch && jar.getJarEntry(candidate) == null && jar.getJarEntry(outerName + CLASS_EXT) == null) return null;
-                var entries = jar.versionedStream()
-                        .filter(file -> !file.isDirectory())
-                        .filter(file -> file.getName().equals(outerName + CLASS_EXT)
-                                || file.getName().startsWith(prefix) && file.getName().endsWith(CLASS_EXT))
-                        .sorted(Comparator.comparing(JarEntry::getName))
-                        .toList();
-                if (!entries.isEmpty()) {
-                    var classes = new ArrayList<ClassModel>();
-                    for (var file : entries) {
-                        try (var input = jar.getInputStream(file)) {
-                            classes.add(ClassFile.of().parse(input.readAllBytes()));
-                        }
-                    }
-                    var selected = jar.getJarEntry(outerName + CLASS_EXT);
-                    if (selected == null) selected = jar.getJarEntry(candidate);
-                    if (selected == null) selected = entries.getFirst();
-                    return new ResolvedClass(List.copyOf(classes), "jar:" + entry.toAbsolutePath().normalize().toUri() + "!/"
-                            + selected.getRealName());
-                }
-            }
         }
         return null;
     }
 
-    static ResolvedClass resolveClass(String binaryName, List<Path> entries) throws IOException {
+    ResolvedClass resolveClass(String binaryName, List<Path> entries) throws IOException {
         var candidates = classFileCandidates(binaryName);
-        for (var entry : entries) {
-            if (Files.isDirectory(entry)) {
-                for (var candidate : candidates) {
-                    var file = entry.resolve(candidate);
-                    if (Files.isRegularFile(file)) {
-                        return new ResolvedClass(readClassGroup(file), unitLocation(file));
-                    }
-                }
-            } else if (Files.isRegularFile(entry)) {
-                try (var jar = ClassPaths.openArchive(entry, true)) {
-                    for (var candidate : candidates) {
-                        if (jar.getJarEntry(candidate) != null) {
-                            return readClassGroup(entry, candidate, false);
-                        }
-                    }
+        boolean prepared = false;
+        for (int index = 0; index < entries.size(); index++) {
+            var entry = entries.get(index);
+            if (!prepared && Files.isRegularFile(entry)) {
+                resolution.inputs.prepare(entries.subList(index, entries.size()));
+                prepared = true;
+            }
+            var root = compiledInput(entry);
+            for (var candidate : candidates) {
+                var input = root.find(candidate);
+                if (input != null) {
+                    return new ResolvedClass(readClassGroup(input.file()), input.get());
                 }
             }
         }

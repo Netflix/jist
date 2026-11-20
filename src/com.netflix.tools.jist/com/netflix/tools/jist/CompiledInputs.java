@@ -134,7 +134,7 @@ final class CompiledInputs {
             return interrupted;
         }
 
-        private static <T> T await(Future<T> future) throws IOException {
+        static <T> T await(Future<T> future) throws IOException {
             try {
                 return future.get();
             } catch (InterruptedException failure) {
@@ -173,17 +173,18 @@ final class CompiledInputs {
 
     private static void scan(Options options, SearchEnvironment environment, Reader reader, Consumer consumer,
                              ExecutorService executor) throws IOException, ToolException {
+        environment.prepareClassPath();
         if (!options.excludeApplicationClasses()) {
             if (readsUnnamedModule(options)) {
                 for (var path : environment.classPathEntries()) {
                     if (environment.searches(path)) {
-                        scanEntry(path, reader, consumer, _ -> true, executor);
+                        scanEntry(environment.compiledInput(path), reader, consumer, _ -> true, executor);
                     }
                 }
             }
             for (var module : environment.moduleInputs()) {
                 if (environment.searches(module)) {
-                    scanEntry(module.location(), reader, consumer, module::includesResource, executor);
+                    scanEntry(environment.compiledInput(module.location()), reader, consumer, module::includesResource, executor);
                 }
             }
         }
@@ -196,27 +197,9 @@ final class CompiledInputs {
             return;
         }
         for (var module : modules) {
-            scanEntry(system.resolve(module), reader, consumer,
+            scanEntry(environment.compiledInput(system.resolve(module)), reader, consumer,
                     resource -> environment.includesSystemResource(module, resource), executor);
         }
-    }
-
-    static byte[] readClass(Path root, String resource) throws IOException {
-        if (Files.isDirectory(root)) {
-            var file = root.resolve(resource);
-            return Files.isRegularFile(file) ? Files.readAllBytes(file) : null;
-        }
-        if (Files.isRegularFile(root)) {
-            try (var jar = ClassPaths.openArchive(root, true)) {
-                var entry = jar.getJarEntry(resource);
-                if (entry != null) {
-                    try (var input = jar.getInputStream(entry)) {
-                        return readAllBytes(input, entry.getSize());
-                    }
-                }
-            }
-        }
-        return null;
     }
 
     static byte[] readAllBytes(InputStream input, long size) throws IOException {
@@ -233,10 +216,9 @@ final class CompiledInputs {
 
     private record ReadClass(byte[] bytes, ClassInput input) {}
 
-    private static void scanEntry(Path path, Reader reader, Consumer consumer, Filter filter, ExecutorService executor)
+    private static void scanEntry(Root root, Reader reader, Consumer consumer, Filter filter, ExecutorService executor)
             throws IOException, ToolException {
-        try (var root = Root.open(path);
-             var reads = new OrderedReads<ReadClass>(executor, value -> consumer.accept(value.bytes(), value.input()))) {
+        try (var reads = new OrderedReads<ReadClass>(executor, value -> consumer.accept(value.bytes(), value.input()))) {
             root.forEach(false, filter, input -> reads.submit(() -> {
                 var bytes = input.read(reader);
                 return bytes == null ? null : new ReadClass(bytes, input);
@@ -245,15 +227,14 @@ final class CompiledInputs {
         }
     }
 
-    record ClassInput(Path file, String resource, long size, String archiveOrigin, String physicalResource)
-            implements Supplier<String> {
+    record ClassInput(Path file, String resource, long size) implements Supplier<String> {
         @Override
         public String get() {
-            return archiveOrigin == null ? unitLocation(file) : archiveOrigin + physicalResource;
+            return unitLocation(file);
         }
 
         byte[] read() throws IOException {
-            return readClassFile(file, size < 0 ? Files.size(file) : size);
+            return read(CompiledInputs::readAllBytes);
         }
 
         byte[] read(Reader reader) throws IOException {
@@ -270,47 +251,47 @@ final class CompiledInputs {
 
     static final class Root implements AutoCloseable {
         private final Path path;
-        private final JarFile jar;
-        private FileSystem archive;
-        private final String origin;
+        private final FileSystem archive;
 
-        private Root(Path path, JarFile jar) {
+        private Root(Path path, FileSystem archive) {
             this.path = path;
-            this.jar = jar;
-            this.origin = jar == null ? null : "jar:" + path.toAbsolutePath().normalize().toUri() + "!/";
+            this.archive = archive;
         }
 
         static Root open(Path path) throws IOException {
             if (!Files.isRegularFile(path)) {
                 return new Root(path, null);
             }
-            return new Root(path, ClassPaths.openArchive(path, false));
+            try {
+                var archive = ClassPaths.openArchive(path);
+                return new Root(archive.getPath("/"), archive);
+            } catch (ZipException | ProviderNotFoundException failure) {
+                var name = path.getFileName().toString();
+                if (name.endsWith(".jar") || name.endsWith(".zip")) {
+                    throw new IOException("Cannot read archive " + path + ": " + failure.getMessage(), failure);
+                }
+                // Class paths may contain non-archive dependency artifacts.
+                return new Root(path, null);
+            } catch (IOException failure) {
+                throw new IOException("Cannot read class-path entry " + path + ": " + failure.getMessage(), failure);
+            }
+        }
+
+        Path path() {
+            return path;
         }
 
         boolean isArchive() {
-            return jar != null;
+            return archive != null;
         }
 
         String location() {
-            return origin != null ? origin : SearchEnvironment.unitLocation(path);
-        }
-
-        private ClassInput input(JarEntry entry) throws IOException {
-            if (archive == null) {
-                // Only selected entries need zipfs paths for parallel positional reads.
-                archive = FileSystems.newFileSystem(path);
-            }
-            return new ClassInput(archive.getPath(entry.getRealName()), entry.getName(), entry.getSize(),
-                    origin, entry.getRealName());
+            return unitLocation(path);
         }
 
         ClassInput find(String resource) throws IOException {
-            if (jar != null) {
-                var entry = jar.getJarEntry(resource);
-                return entry == null ? null : input(entry);
-            }
             var file = path.resolve(resource);
-            return Files.isRegularFile(file) ? new ClassInput(file, resource, -1, null, null) : null;
+            return Files.isRegularFile(file) ? new ClassInput(file, resource, -1) : null;
         }
 
         void forEach(boolean metadataFirst, InputConsumer consumer) throws IOException, ToolException {
@@ -318,17 +299,16 @@ final class CompiledInputs {
         }
 
         void forEach(boolean metadataFirst, Filter filter, InputConsumer consumer) throws IOException, ToolException {
-            if (jar != null) {
-                var entries = jar.isMultiRelease() ? jar.versionedStream().iterator() : jar.entries().asIterator();
-                while (entries.hasNext()) {
-                    var entry = entries.next();
-                    if (!entry.isDirectory() && entry.getName().endsWith(".class") && filter.test(entry.getName())) {
-                        consumer.accept(input(entry));
-                    }
+            if (!Files.isDirectory(path)) return;
+            var prefix = path.toString();
+            int firstCharacter = prefix.length() + (!prefix.isEmpty() && path.getFileName() != null ? 1 : 0);
+            var versions = isArchive() ? path.resolve("META-INF/versions") : null;
+            walkFiles(path, ".class", metadataFirst, directory -> !directory.equals(versions), (file, attributes) -> {
+                var resource = file.toString().substring(firstCharacter).replace(File.separatorChar, '/');
+                if (filter.test(resource)) {
+                    consumer.accept(new ClassInput(file, resource, attributes.size()));
                 }
-            } else if (Files.isDirectory(path)) {
-                forEachDirectory(path, metadataFirst, filter, consumer);
-            }
+            });
         }
 
         void forEachPackage(Collection<String> packages, Filter filter, InputConsumer consumer) throws IOException, ToolException {
@@ -350,41 +330,10 @@ final class CompiledInputs {
             }
         }
 
-        private void forEachDirectory(Path directory, boolean metadataFirst, Filter filter, InputConsumer consumer)
-                throws IOException, ToolException {
-            int firstName = path.toString().isEmpty() ? 0 : path.getNameCount();
-            walkFiles(directory, ".class", metadataFirst, file -> {
-                // The walker already guarantees descent; relativize needlessly compares every parent segment.
-                var resource = file.subpath(firstName, file.getNameCount()).toString().replace(File.separatorChar, '/');
-                if (filter.test(resource)) {
-                    consumer.accept(new ClassInput(file, resource, -1, null, null));
-                }
-            });
-        }
-
         @Override
         public void close() throws IOException {
-            if (jar != null) {
-                var fileSystem = archive;
-                try (jar; fileSystem) {
-                    // Readers must finish or be cancelled and joined before closing their root.
-                }
-            }
+            if (archive != null) archive.close();
         }
-    }
-
-    private static byte[] readClassFile(Path file, long size) throws IOException {
-        if (size < 0 || size > Integer.MAX_VALUE) {
-            return Files.readAllBytes(file);
-        }
-        var bytes = new byte[(int) size];
-        try (var input = Files.newInputStream(file)) {
-            int read = input.readNBytes(bytes, 0, bytes.length);
-            if (read != bytes.length) {
-                throw new EOFException("Expected " + bytes.length + " bytes for " + file + ", read " + read);
-            }
-        }
-        return bytes;
     }
 
     @FunctionalInterface
@@ -392,55 +341,70 @@ final class CompiledInputs {
         void accept(Path path) throws IOException, ToolException;
     }
 
-    private static final class MetadataVisitException extends RuntimeException {
+    @FunctionalInterface
+    private interface FileConsumer {
+        void accept(Path path, BasicFileAttributes attributes) throws IOException, ToolException;
+    }
+
+    private static final class ToolVisitException extends IOException {
         private static final long serialVersionUID = 1L;
 
-        MetadataVisitException(Exception cause) {
+        ToolVisitException(ToolException cause) {
             super(cause);
         }
     }
 
     static void walkFiles(Path directory, String extension, PathConsumer consumer)
             throws IOException, ToolException {
-        walkFiles(directory, extension, true, consumer);
+        walkFiles(directory, extension, true, _ -> true, (file, _) -> consumer.accept(file));
     }
 
-    private static void walkFiles(Path directory, String extension, boolean metadataFirst, PathConsumer consumer)
-            throws IOException, ToolException {
+    private static void walkFiles(Path directory, String extension, boolean metadataFirst,
+            Predicate<Path> descend, FileConsumer consumer) throws IOException, ToolException {
         var root = Files.isSymbolicLink(directory) ? directory.toRealPath() : directory;
-        PathConsumer visit = root.equals(directory) ? consumer
-                : file -> consumer.accept(directory.resolve(root.relativize(file)));
+        FileConsumer visit = root.equals(directory) ? consumer
+                : (file, attributes) -> consumer.accept(directory.resolve(root.relativize(file)), attributes);
         var metadata = metadataFirst ? List.of("module-info" + extension, "package-info" + extension) : List.<String>of();
-        try (var files = Files.find(root, Integer.MAX_VALUE, (file, attributes) -> {
-            if (attributes.isDirectory()) {
-                try {
+        try {
+            Files.walkFileTree(root, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) throws IOException {
+                    if (!descend.test(directory)) {
+                        return FileVisitResult.SKIP_SUBTREE;
+                    }
                     for (var name : metadata) {
-                        var descriptor = file.resolve(name);
+                        var descriptor = directory.resolve(name);
                         if (Files.isRegularFile(descriptor)) {
-                            visit.accept(descriptor);
+                            emit(descriptor, Files.readAttributes(descriptor, BasicFileAttributes.class));
                         }
                     }
-                } catch (IOException | ToolException failure) {
-                    // Files.find's predicate cannot propagate the consumer's checked failures.
-                    throw new MetadataVisitException(failure);
+                    return FileVisitResult.CONTINUE;
                 }
-                return false;
-            }
-            return file.toString().endsWith(extension)
-                    && !metadata.contains(file.getFileName().toString())
-                    && (attributes.isRegularFile() || attributes.isSymbolicLink() && Files.isRegularFile(file));
-        })) {
-            try {
-                var iterator = files.iterator();
-                while (iterator.hasNext()) {
-                    visit.accept(iterator.next());
+
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
+                    if (file.toString().endsWith(extension)
+                            && (metadata.isEmpty() || !metadata.contains(file.getFileName().toString()))) {
+                        if (attributes.isSymbolicLink() && Files.isRegularFile(file)) {
+                            attributes = Files.readAttributes(file, BasicFileAttributes.class);
+                        }
+                        if (attributes.isRegularFile()) {
+                            emit(file, attributes);
+                        }
+                    }
+                    return FileVisitResult.CONTINUE;
                 }
-            } catch (MetadataVisitException failure) {
-                if (failure.getCause() instanceof IOException cause) {
-                    throw cause;
+
+                private void emit(Path file, BasicFileAttributes attributes) throws IOException {
+                    try {
+                        visit.accept(file, attributes);
+                    } catch (ToolException failure) {
+                        throw new ToolVisitException(failure);
+                    }
                 }
-                throw (ToolException) failure.getCause();
-            }
+            });
+        } catch (ToolVisitException failure) {
+            throw (ToolException) failure.getCause();
         }
     }
 }

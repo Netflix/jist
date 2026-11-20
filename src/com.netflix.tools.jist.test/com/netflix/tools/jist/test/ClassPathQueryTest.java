@@ -80,18 +80,73 @@ class ClassPathQueryTest {
     }
 
     @Test
+    void resolvesAnEarlierClassPathEntryWithoutOpeningLaterArchives(@TempDir Path directory) throws Exception {
+        var fixture = fixture(directory);
+        var archive = directory.resolve("unused.jar");
+        Files.writeString(archive, "not an archive");
+        var result = run(fixture.classes() + File.pathSeparator + archive, directory.resolve("no-sources"),
+                List.of("--source", "none", "example.Sample"));
+
+        assertEquals(0, result.code(), result.error());
+        assertTrue(result.output().contains("public class Sample"), result.output());
+        assertEquals("", result.error());
+    }
+
+    @Test
+    void resolvesCurrentDirectorySourceBeforeCompiledInputs(@TempDir Path directory) throws Exception {
+        var fixture = fixture(directory);
+        Files.writeString(directory.resolve("src/example/Sample.java"), """
+                package example;
+                public class Sample {
+                    public int fresh() { return 42; }
+                }
+                """);
+        var archive = directory.resolve("unused.jar");
+        Files.writeString(archive, "not an archive");
+        for (var target : List.of("example.Sample", "example.Sample.fresh")) {
+            var result = run(fixture.classes() + File.pathSeparator + archive, directory.resolve("src"),
+                    List.of("--source", "none", target));
+
+            assertEquals(0, result.code(), result.error());
+            assertTrue(result.output().contains("int fresh()"), result.output());
+            assertEquals("", result.error());
+        }
+    }
+
+    @Test
+    void earlierDirectorySourceWinsOverALaterFilenameMatch(@TempDir Path directory) throws Exception {
+        var fixture = fixture(directory);
+        var earlier = directory.resolve("earlier/example/Declarations.java");
+        Files.createDirectories(earlier.getParent());
+        Files.writeString(earlier, "package example; class Sample { public int first() { return 1; } }");
+        var later = directory.resolve("later/example/Sample.java");
+        Files.createDirectories(later.getParent());
+        Files.writeString(later, "package example; public class Sample { public int second() { return 2; } }");
+        var result = run(fixture.classes().toString(),
+                directory.resolve("earlier") + File.pathSeparator + directory.resolve("later"),
+                List.of("--source", "none", "example.Sample"));
+
+        assertEquals(0, result.code(), result.error());
+        assertTrue(result.output().contains("int first()"), result.output());
+        assertEquals("", result.error());
+    }
+
+    @Test
     void namesCorruptArchivesInDiagnostics(@TempDir Path directory) throws Exception {
         var fixture = fixture(directory);
         for (var extension : List.of(".jar", ".zip")) {
             var archive = directory.resolve("corrupt" + extension);
             Files.writeString(archive, "not an archive");
-            for (var query : List.of(List.of("example.Sample"), List.of("-l", "--kind", "type", "Sample"),
-                    List.of("--callers", "java.time.Clock.systemUTC"))) {
-                var result = run(archive + File.pathSeparator + fixture.classes(), fixture.sources(), query);
-                assertEquals(2, result.code(), result.error());
-                assertTrue(result.error().startsWith("Error:"), result.error());
-                assertTrue(result.error().contains(archive.toString()), result.error());
-                assertFalse(result.error().contains("\tat "), result.error());
+            for (var classPath : List.of(archive + File.pathSeparator + fixture.classes(),
+                    fixture.classes() + File.pathSeparator + archive)) {
+                for (var query : List.of(List.of("example.Missing"), List.of("-l", "--kind", "type", "Sample"),
+                        List.of("--callers", "java.time.Clock.systemUTC"))) {
+                    var result = run(classPath, fixture.sources(), query);
+                    assertEquals(2, result.code(), result.error());
+                    assertTrue(result.error().startsWith("Error:"), result.error());
+                    assertTrue(result.error().contains(archive.toString()), result.error());
+                    assertFalse(result.error().contains("\tat "), result.error());
+                }
             }
         }
     }
@@ -121,8 +176,12 @@ class ClassPathQueryTest {
     }
 
     private static Result run(String classPath, Path sources, List<String> query) {
+        return run(classPath, sources.toString(), query);
+    }
+
+    private static Result run(String classPath, String sources, List<String> query) {
         var arguments = new ArrayList<>(List.of("--limit-modules", "java.base", "--exclude-system-modules",
-                "--class-path", classPath, "--source-path", sources.toString()));
+                "--class-path", classPath, "--source-path", sources));
         arguments.addAll(query);
         var output = new StringWriter();
         var error = new StringWriter();
